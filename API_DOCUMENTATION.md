@@ -6,9 +6,9 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
 
 ## 1. Authentication (`/auth`)
 
-### Register User (Moderator)
+### Register User (General)
 *   **Endpoint**: `POST /auth/register`
-*   **Description**: Registers a new moderator. Sends a verification email.
+*   **Description**: Registers a new user. Default role is `pilgrim`.
 *   **Input**:
     ```json
     {
@@ -18,64 +18,31 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
       "phone_number": "+966501234567"
     }
     ```
-*   **Output (200)**:
+
+### Register Invited Pilgrim
+*   **Endpoint**: `POST /auth/register-invited-pilgrim`
+*   **Input**:
     ```json
     {
-      "success": true,
-      "message": "Verification code sent to email",
-      "email": "john@example.com"
+      "token": "invitation_token_123",
+      "full_name": "Jane User",
+      "password": "password123",
+      "phone_number": "+966555555555"
     }
     ```
 
 ### Verify Email
 *   **Endpoint**: `POST /auth/verify-email`
-*   **Input**:
-    ```json
-    {
-      "email": "john@example.com",
-      "code": "123456"
-    }
-    ```
-*   **Output (201)**:
-    ```json
-    {
-      "success": true,
-      "message": "Email verified successfully",
-      "user_id": "65c..."
-    }
-    ```
-
-### Resend Verification Code
-*   **Endpoint**: `POST /auth/resend-verification`
-*   **Input**: `{"email": "john@example.com"}`
+*   **Input**: `{"email": "...", "code": "123456"}`
 
 ### Login
 *   **Endpoint**: `POST /auth/login`
-*   **Input**:
-    ```json
-    {
-      "email": "john@example.com",
-      "password": "securepassword123"
-    }
-    ```
-*   **Output (200)**:
-    ```json
-    {
-      "token": "eyJhbG...",
-      "role": "moderator", // or "pilgrim", "admin"
-      "full_name": "John Doe",
-      "user_id": "65c..."
-    }
-    ```
+*   **Input**: `{"email": "...", "password": "..."}`
+*   **Output**: Returns `token`, `role`, `user_id`, `full_name`.
 
-### Get Current Profile
-*   **Endpoint**: `GET /auth/me`
-*   **Headers**: `Authorization: Bearer <token>`
-
-### Update Profile
-*   **Endpoint**: `PUT /auth/update-profile`
-*   **Headers**: `Authorization: Bearer <token>`, `Content-Type: multipart/form-data`
-*   **Input**: `full_name`, `phone_number`, `profile_picture` (file)
+### Profile Management
+*   **Get Profile**: `GET /auth/me`
+*   **Update Profile**: `PUT /auth/update-profile` (Multipart form-data: `profile_picture`, `full_name`, `phone_number`)
 
 ---
 
@@ -83,12 +50,9 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
 
 *All routes require Pilgrim role login*
 
-### Get Pilgrim Profile
-*   **Endpoint**: `GET /pilgrim/profile` (Returns self profile)
-
 ### Get My Group
 *   **Endpoint**: `GET /pilgrim/my-group`
-*   **Output**: Group details, moderators list, fellow pilgrims count.
+*   **Output**: Returns assigned group, moderators list (with location), and creator info.
 
 ### Update Location
 *   **Endpoint**: `PUT /pilgrim/location`
@@ -107,7 +71,49 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
 
 ---
 
-## 3. Groups (`/groups`)
+## 3. Messages (`/messages`)
+
+*Used for Group Broadcasts (Moderator -> Pilgrims)*
+
+### Send Message
+*   **Endpoint**: `POST /messages`
+*   **Headers**: `Authorization: Bearer <token>`, `Content-Type: multipart/form-data` (if file attached)
+*   **Input**:
+    *   `group_id`: ID of the group.
+    *   `content`: Text content.
+    *   `type`: 'text', 'voice', or 'image'.
+    *   `file`: (Optional) Audio/Image file.
+
+### Get Group Messages
+*   **Endpoint**: `GET /messages/group/:group_id`
+*   **Query**: `?page=1&limit=50`
+*   **Output**: List of messages sorted by date.
+
+---
+
+## 4. Admin & Moderator Management (`/admin`)
+
+### Request Moderator Status
+*   **Endpoint**: `POST /admin/request-moderator`
+*   **Description**: Authenticated user requests upgrade to Moderator role.
+
+### Get Pending Requests (Admin Only)
+*   **Endpoint**: `GET /admin/requests`
+
+### Approve Request (Admin Only)
+*   **Endpoint**: `PUT /admin/requests/:request_id/approve`
+*   **Description**: Upgrades user role to 'moderator' and notifies them.
+
+### Reject Request (Admin Only)
+*   **Endpoint**: `PUT /admin/requests/:request_id/reject`
+
+### User Management (Admin Only)
+*   **List Users**: `GET /admin/users`
+*   **System Stats**: `GET /admin/stats`
+
+---
+
+## 5. Groups (`/groups`)
 
 *Requires Moderator or Admin role*
 
@@ -115,79 +121,31 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
 *   **Endpoint**: `POST /groups/create`
 *   **Input**: `{"group_name": "Hajj Group 2024"}`
 
-### Get My Groups (Dashboard)
+### Group Dashboard
 *   **Endpoint**: `GET /groups/dashboard`
-*   **Output**: List of groups created by or moderating the user.
+*   **Output**: Groups managed by the user.
 
-### Add Pilgrim to Group (Manual)
-*   **Endpoint**: `POST /groups/:group_id/add-pilgrim`
-*   **Input**: `{"user_id": "65d..."}` (Existing Pilgrim ID)
-
-### Remove Pilgrim
-*   **Endpoint**: `POST /groups/:group_id/remove-pilgrim`
-*   **Input**: `{"user_id": "65d..."}`
-
-### Invite Moderator/Pilgrim
-*   *(See Invitation section)*
-
-### Delete Group
-*   **Endpoint**: `DELETE /groups/:group_id`
-
-### Leave Group (as Moderator)
-*   **Endpoint**: `POST /groups/:group_id/leave`
+### Manage Members
+*   **Add Pilgrim**: `POST /groups/:group_id/add-pilgrim`
+*   **Remove Pilgrim**: `POST /groups/:group_id/remove-pilgrim`
+*   **Leave Group**: `POST /groups/:group_id/leave`
+*   **Delete Group**: `DELETE /groups/:group_id`
 
 ---
 
-## 4. Invitations (`/invitation`)
+## 6. Invitations (`/invitation`)
 
 ### Send Invitation
 *   **Endpoint**: `POST /invitation/groups/:group_id/invite`
-*   **Input**:
-    ```json
-    {
-      "email": "invitee@example.com",
-      "role": "moderator" // or "pilgrim" (future)
-    }
-    ```
+*   **Input**: `{"email": "...", "role": "pilgrim"}`
 
-### Get My Invitations
+### Track Invitations
 *   **Endpoint**: `GET /invitation/invitations`
 
-### Accept/Decline Invitation
-*   **Endpoint**: `POST /invitation/invitations/:id/accept`
-*   **Endpoint**: `POST /invitation/invitations/:id/decline`
-
 ---
 
-## 5. Notifications (`/notifications`)
+## 7. Notifications (`/notifications`)
 
-### Get Notifications
-*   **Endpoint**: `GET /notifications`
-*   **Query**: `?limit=20&page=1`
-
-### Mark as Read
-*   **Endpoint**: `PUT /notifications/:id/read`
-*   **Endpoint**: `PUT /notifications/read-all`
-
----
-
-## 6. Hardware (`/hardware`)
-
-### Ping (Device)
-*   **Endpoint**: `POST /hardware/ping`
-*   **Input**: `serial_number`, `lat`, `lng`, `battery_percent`
-
-### Admin Management
-*   **Register Band**: `POST /hardware/register`
-*   **List Bands**: `GET /hardware/bands`
-
----
-
-## 7. Admin (`/admin`)
-
-*Requires Admin role*
-
-*   **List Users**: `GET /admin/users`
-*   **Promote/Demote**: `POST /admin/users/promote-to-admin`, `demote-to-moderator`
-*   **Delete User**: `DELETE /admin/users/:user_id/force`
-*   **System Stats**: `GET /admin/stats`
+*   **Get All**: `GET /notifications`
+*   **Mark Read**: `PUT /notifications/:id/read`
+*   **Mark All Read**: `PUT /notifications/read-all`
