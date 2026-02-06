@@ -8,6 +8,7 @@ const pilgrim_schema = new mongoose.Schema({
     phone_number: { type: String, unique: true, sparse: true }, // Each user has unique phone number
     age: { type: Number, min: 0 }, // Age of the user, optional
     gender: { type: String, enum: ['male', 'female', 'other'] }, // Gender of the user, optional
+    profile_picture: { type: String, default: null },
     medical_history: String, // Optional medical information for pilgrims
 
     // Live Tracking Fields (Replaces Hardware Band)

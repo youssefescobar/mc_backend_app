@@ -176,7 +176,7 @@ exports.login_user = async (req, res) => {
 // Get current user profile
 exports.get_profile = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('_id full_name email role phone_number created_at');
+        const user = await User.findById(req.user.id).select('_id full_name email role phone_number profile_picture created_at');
 
         if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -190,15 +190,22 @@ exports.get_profile = async (req, res) => {
 exports.update_profile = async (req, res) => {
     try {
         const { full_name, phone_number } = req.body;
+        const profile_picture = req.file ? req.file.filename : undefined;
+
+        const updateData = {
+            ...(full_name && { full_name }),
+            ...(phone_number && { phone_number })
+        };
+
+        if (profile_picture) {
+            updateData.profile_picture = profile_picture;
+        }
 
         const user = await User.findByIdAndUpdate(
             req.user.id,
-            {
-                ...(full_name && { full_name }),
-                ...(phone_number && { phone_number })
-            },
+            updateData,
             { new: true }
-        ).select('_id full_name email role phone_number created_at');
+        ).select('_id full_name email role phone_number profile_picture created_at');
 
         res.json({ message: "Profile updated successfully", user });
     } catch (error) {

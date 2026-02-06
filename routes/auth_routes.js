@@ -12,10 +12,12 @@ router.post('/verify-email', authLimiter, validate(verify_email_schema), auth_ct
 router.post('/resend-verification', authLimiter, validate(resend_verification_schema), auth_ctrl.resend_verification);
 router.post('/login', authLimiter, validate(login_schema), auth_ctrl.login_user);
 
+const upload = require('../middleware/upload_middleware');
+
 // Protected routes
 router.use(protect);
 router.get('/me', auth_ctrl.get_profile);
-router.put('/update-profile', validate(update_profile_schema), auth_ctrl.update_profile);
+router.put('/update-profile', upload.single('profile_picture'), validate(update_profile_schema), auth_ctrl.update_profile);
 
 // Moderator/Admin routes
 router.post('/register-pilgrim', authorize('moderator', 'admin'), validate(require('../middleware/schemas').register_pilgrim_schema), auth_ctrl.register_pilgrim);

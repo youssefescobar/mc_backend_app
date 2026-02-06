@@ -37,8 +37,14 @@ exports.update_group_schema = Joi.object({
 });
 
 exports.add_pilgrim_schema = Joi.object({
-    user_id: Joi.string().required()
-});
+    user_id: Joi.string().optional(),
+    full_name: Joi.string().optional().min(3).max(100),
+    national_id: Joi.string().optional(),
+    phone_number: Joi.string().optional().allow(''),
+    age: Joi.number().optional().min(0).max(120),
+    gender: Joi.string().optional().valid('male', 'female', 'other'),
+    medical_history: Joi.string().optional().allow('').max(500)
+}).or('user_id', 'national_id');
 
 // Hardware validations
 exports.register_band_schema = Joi.object({
