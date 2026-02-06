@@ -188,8 +188,59 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
     }
 };
 
+const sendPilgrimInvitationEmail = async (to, inviterName, groupName, deepLink) => {
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: to,
+        subject: `Join "${groupName}" on Munawwara Care`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <h1 style="color: #2563eb; margin: 0;">Munawwara Care</h1>
+                    <p style="color: #666; margin-top: 5px;">Hajj & Umrah Companion</p>
+                </div>
+                
+                <div style="background-color: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                    <h2 style="color: #1e40af; margin-top: 0;">You've been invited!</h2>
+                    
+                    <p style="font-size: 16px; line-height: 1.5;">Hello,</p>
+                    <p style="font-size: 16px; line-height: 1.5;">
+                        <strong>${inviterName}</strong> has invited you to join the group <strong>"${groupName}"</strong> as a pilgrim.
+                    </p>
+                    
+                    <div style="text-align: center; margin: 35px 0;">
+                        <a href="${deepLink}" style="background-color: #2563eb; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px; display: inline-block;">
+                            Join Group Now
+                        </a>
+                        <p style="font-size: 12px; color: #888; margin-top: 15px;">
+                            (Tap this button on your mobile phone to open the app)
+                        </p>
+                    </div>
+                
+                    <p style="font-size: 14px; color: #666; border-top: 1px solid #eee; padding-top: 20px;">
+                        If the button above doesn't work, ensure you have the <strong>Munawwara Care</strong> app installed on your phone.
+                    </p>
+                </div>
+                
+                <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px;">
+                    <p>&copy; ${new Date().getFullYear()} Munawwara Care. All rights reserved.</p>
+                </div>
+            </div>
+        `
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`Pilgrim invitation email sent to ${to}`);
+    } catch (error) {
+        console.error('Error sending pilgrim invitation email:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     generateVerificationCode,
     sendVerificationEmail,
-    sendGroupInvitationEmail
+    sendGroupInvitationEmail,
+    sendPilgrimInvitationEmail
 };

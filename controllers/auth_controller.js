@@ -78,7 +78,7 @@ exports.verify_email = async (req, res) => {
             full_name: pending_user.full_name,
             email: pending_user.email,
             password: pending_user.password,
-            role: 'moderator',
+            role: 'pilgrim',
             phone_number: pending_user.phone_number
         });
 
@@ -136,7 +136,7 @@ exports.login_user = async (req, res) => {
 
         // 1. Differentiate by checking User collection (Moderators/Admins)
         let user = await User.findOne({ email });
-        let role = 'moderator'; // Default if found in User
+        let role = user.role || 'pilgrim';
 
         if (user) {
             if (!(await bcrypt.compare(password, user.password))) {
@@ -213,8 +213,103 @@ exports.update_profile = async (req, res) => {
     }
 };
 
+// Update user location (Moderator)
+exports.update_location = async (req, res) => {
+    try {
+        const { latitude, longitude } = req.body;
+
+        if (latitude === undefined || longitude === undefined) {
+            return res.status(400).json({ message: 'Latitude and longitude required' });
+        }
+
+        await User.findByIdAndUpdate(
+            req.user.id,
+            {
+                current_latitude: latitude,
+                current_longitude: longitude,
+                last_location_update: new Date()
+            }
+        );
+
+        res.json({ message: 'Location updated' });
+    } catch (error) {
+        console.error('Update location error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+const Group = require('../models/group_model');
+const PendingPilgrim = require('../models/pending_pilgrim_model');
+
+// ... existing code ...
+
+// Register a new pilgrim via invitation link
+exports.register_invited_pilgrim = async (req, res) => {
+    try {
+        const { full_name, password, token } = req.body;
+
+        // 1. Validate Token
+        const pending_pilgrim = await PendingPilgrim.findOne({ verification_token: token });
+
+        if (!pending_pilgrim) {
+            return res.status(400).json({ message: "Invalid or expired invitation token" });
+        }
+
+        if (new Date() > pending_pilgrim.expires_at) {
+            return res.status(400).json({ message: "Invitation has expired" });
+        }
+
+        // 2. Check if email already registered (as User or Pilgrim)
+        // Should ideally update existing record if migrated, but for now assuming new account
+        const existing_user = await User.findOne({ email: pending_pilgrim.email });
+        const existing_pilgrim = await Pilgrim.findOne({ email: pending_pilgrim.email });
+        if (existing_user || existing_pilgrim) {
+            return res.status(400).json({ message: "Email is already registered. Please login." });
+        }
+
+        // 3. Create Pilgrim Account
+        const hashed_password = await bcrypt.hash(password, 10);
+
+        const pilgrim = await Pilgrim.create({
+            full_name,
+            email: pending_pilgrim.email,
+            password: hashed_password,
+            created_by: pending_pilgrim.invited_by
+        });
+
+        // 4. Add Pilgrim to Group
+        await Group.findByIdAndUpdate(pending_pilgrim.group_id, {
+            $addToSet: { pilgrims: pilgrim._id }
+        });
+
+        // 5. Delete Pending Record
+        await PendingPilgrim.deleteOne({ _id: pending_pilgrim._id });
+
+        // 6. Generate Login Token
+        const jwt_token = jwt.sign(
+            { id: pilgrim._id, role: 'pilgrim' },
+            process.env.JWT_SECRET,
+            { expiresIn: '30d' }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: "Pilgrim account registered and added to group",
+            token: jwt_token,
+            role: 'pilgrim',
+            full_name: pilgrim.full_name,
+            user_id: pilgrim._id
+        });
+
+    } catch (error) {
+        console.error('Pilgrim invitation registration error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 // Register a pilgrim (by moderator/admin) - no password required
 exports.register_pilgrim = async (req, res) => {
+    // ... existing code ...
     try {
         const { full_name, national_id, medical_history, email, age, gender, phone_number, password } = req.body;
 

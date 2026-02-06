@@ -1,4 +1,5 @@
 const User = require('../models/user_model');
+const ModeratorRequest = require('../models/moderator_request_model');
 const Pilgrim = require('../models/pilgrim_model');
 const Group = require('../models/group_model');
 const HardwareBand = require('../models/hardware_band_model');
@@ -434,6 +435,96 @@ exports.unassign_bands_from_group = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in unassign_bands_from_group:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Submit a request to become a moderator
+exports.submit_moderator_request = async (req, res) => {
+    try {
+        const user_id = req.user.id;
+
+        // Check if user is already a moderator or admin
+        const user = await User.findById(user_id);
+        if (['moderator', 'admin'].includes(user.role)) {
+            return res.status(400).json({ message: "You are already a moderator or admin" });
+        }
+
+        // Check if a pending request already exists
+        const existing_request = await ModeratorRequest.findOne({ user_id, status: 'pending' });
+        if (existing_request) {
+            return res.status(400).json({ message: "You already have a pending request" });
+        }
+
+        await ModeratorRequest.create({ user_id });
+
+        res.status(201).json({ message: "Request submitted successfully" });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Get all pending requests (Admin only)
+exports.get_pending_requests = async (req, res) => {
+    try {
+        const requests = await ModeratorRequest.find({ status: 'pending' })
+            .populate('user_id', 'full_name email phone_number profile_picture')
+            .sort({ created_at: -1 });
+
+        res.json(requests);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Approve a moderator request
+exports.approve_moderator_request = async (req, res) => {
+    try {
+        const { request_id } = req.params;
+
+        const request = await ModeratorRequest.findById(request_id);
+        if (!request) {
+            return res.status(404).json({ message: "Request not found" });
+        }
+
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: "Request is already processed" });
+        }
+
+        // Update request status
+        request.status = 'approved';
+        request.updated_at = Date.now();
+        await request.save();
+
+        // Update user role
+        await User.findByIdAndUpdate(request.user_id, { role: 'moderator' });
+
+        res.json({ message: "Request approved. User is now a moderator." });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Reject a moderator request
+exports.reject_moderator_request = async (req, res) => {
+    try {
+        const { request_id } = req.params;
+
+        const request = await ModeratorRequest.findById(request_id);
+        if (!request) {
+            return res.status(404).json({ message: "Request not found" });
+        }
+
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: "Request is already processed" });
+        }
+
+        request.status = 'rejected';
+        request.updated_at = Date.now();
+        await request.save();
+
+        res.json({ message: "Request rejected" });
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 };

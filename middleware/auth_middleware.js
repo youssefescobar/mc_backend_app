@@ -10,7 +10,18 @@ const protect = async (req, res, next) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
         // Fetch full user details (excluding password)
-        const user = await User.findById(decoded.id).select('-password');
+        let user = await User.findById(decoded.id).select('-password');
+
+        if (!user) {
+            // Check Pilgrim collection (legacy or separate pilgrims)
+            const Pilgrim = require('../models/pilgrim_model');
+            user = await Pilgrim.findById(decoded.id).select('-password');
+            if (user) {
+                // Ensure role is set for authorization checks
+                user.role = 'pilgrim';
+            }
+        }
+
         if (!user) {
             return res.status(401).json({ message: "User not found" });
         }
@@ -35,4 +46,11 @@ const authorize = (...roles) => {
     };
 };
 
-module.exports = { protect, authorize };
+const verifyAdmin = authorize('admin');
+
+module.exports = {
+    protect,
+    authorize,
+    verifyToken: protect,
+    verifyAdmin
+};

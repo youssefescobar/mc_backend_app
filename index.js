@@ -10,6 +10,7 @@ const group_routes = require('./routes/group_routes');
 const invitation_routes = require('./routes/invitation_routes');
 const notification_routes = require('./routes/notification_routes');
 const pilgrim_routes = require('./routes/pilgrim_routes');
+const admin_routes = require('./routes/admin_routes');
 
 const app = express();
 
@@ -34,6 +35,8 @@ app.use('/api/groups', group_routes);
 app.use('/api', invitation_routes);
 app.use('/api/notifications', notification_routes);
 app.use('/api/pilgrim', pilgrim_routes);
+app.use('/api/admin', admin_routes);
+app.use('/api/messages', require('./routes/message_routes'));
 
 // Error Handling
 app.use((err, req, res, next) => {

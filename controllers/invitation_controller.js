@@ -1,8 +1,72 @@
-const Invitation = require('../models/invitation_model');
-const Notification = require('../models/notification_model');
-const Group = require('../models/group_model');
-const User = require('../models/user_model');
-const { sendGroupInvitationEmail } = require('../config/email_service');
+const crypto = require('crypto');
+const PendingPilgrim = require('../models/pending_pilgrim_model');
+const { sendGroupInvitationEmail, sendPilgrimInvitationEmail } = require('../config/email_service');
+
+// ... existing code ...
+
+// Invite a pilgrim to the group
+const invite_pilgrim = async (req, res) => {
+    try {
+        const { group_id } = req.params;
+        const { email } = req.body;
+        const inviter_id = req.user.id;
+
+        // 1. Verify Inviter is Moderator of Group
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return res.status(404).json({ success: false, message: 'Group not found' });
+        }
+
+        const is_moderator = group.moderator_ids.some(id => id.toString() === inviter_id.toString()) ||
+            group.created_by.toString() === inviter_id.toString();
+
+        if (!is_moderator) {
+            return res.status(403).json({ success: false, message: 'Only group moderators can invite pilgrims' });
+        }
+
+        // 2. Check if already a pending pilgrim
+        const existing_pending = await PendingPilgrim.findOne({ email: email.toLowerCase(), group_id });
+        if (existing_pending) {
+            return res.status(400).json({ success: false, message: 'Pilgrim already invited to this group' });
+        }
+
+        // 3. Check if already a registered pilgrim (optional: redirect to login info)
+        // For now, we allow sending invite even if registered, so they can be added to group simply?
+        // Actually, better to check. If registered, use the "Add Pilgrim" flow instead.
+        // But for "Invitation" flow, we assume they are new to the app or this specific group flow.
+
+        // 4. Generate Token
+        const token = crypto.randomBytes(32).toString('hex');
+        const expires_at = new Date();
+        expires_at.setDate(expires_at.getDate() + 7); // 7 days expiry
+
+        // 5. Create Pending Pilgrim Record
+        await PendingPilgrim.create({
+            email: email.toLowerCase(),
+            group_id,
+            invited_by: inviter_id,
+            verification_token: token,
+            expires_at
+        });
+
+        // 6. Send Email with Deep Link
+        const inviter = await User.findById(inviter_id);
+        const deepLink = `mc_mobile://pilgrim-signup?token=${token}`; // Deep link scheme
+
+        await sendPilgrimInvitationEmail(email.toLowerCase(), inviter.full_name, group.group_name, deepLink);
+
+        res.status(201).json({
+            success: true,
+            message: 'Pilgrim invitation sent successfully'
+        });
+
+    } catch (error) {
+        console.error('Invite pilgrim error:', error);
+        res.status(500).json({ success: false, message: 'Failed to invite pilgrim' });
+    }
+};
+
+// (Moved export to end of file)
 
 // Send invitation to another moderator
 const send_invitation = async (req, res) => {
@@ -230,5 +294,6 @@ module.exports = {
     send_invitation,
     accept_invitation,
     decline_invitation,
-    get_my_invitations
+    get_my_invitations,
+    invite_pilgrim
 };

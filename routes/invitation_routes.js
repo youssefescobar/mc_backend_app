@@ -13,8 +13,11 @@ const {
 // All routes require authentication
 router.use(protect);
 
-// Send invitation to a group
+// Send invitation to a group (Moderator)
 router.post('/groups/:group_id/invite', validate(send_invitation_schema), send_invitation);
+
+// Send invitation to a pilgrim (Moderator)
+router.post('/groups/:group_id/invite-pilgrim', validate(send_invitation_schema), require('../controllers/invitation_controller').invite_pilgrim);
 
 // Get my pending invitations
 router.get('/invitations', get_my_invitations);

@@ -6,12 +6,18 @@ const user_schema = new mongoose.Schema({
     password: { type: String, required: true },
     role: {
         type: String,
-        enum: ['admin', 'moderator'],
-        default: 'moderator'
+        enum: ['admin', 'moderator', 'pilgrim'],
+        default: 'pilgrim'
     },
     profile_picture: { type: String, default: null },
     phone_number: { type: String, required: true, unique: true }, // Each user has unique phone number
     active: { type: Boolean, default: true }, // Track if account is active
+
+    // Location Tracking (for Moderators)
+    current_latitude: { type: Number },
+    current_longitude: { type: Number },
+    last_location_update: { type: Date },
+
     created_at: { type: Date, default: Date.now }
 });
 
