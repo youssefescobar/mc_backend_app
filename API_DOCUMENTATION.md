@@ -97,19 +97,7 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
 *   **Endpoint**: `POST /admin/request-moderator`
 *   **Description**: Authenticated user requests upgrade to Moderator role.
 
-### Get Pending Requests (Admin Only)
-*   **Endpoint**: `GET /admin/requests`
-
-### Approve Request (Admin Only)
-*   **Endpoint**: `PUT /admin/requests/:request_id/approve`
-*   **Description**: Upgrades user role to 'moderator' and notifies them.
-
-### Reject Request (Admin Only)
-*   **Endpoint**: `PUT /admin/requests/:request_id/reject`
-
-### User Management (Admin Only)
-*   **List Users**: `GET /admin/users`
-*   **System Stats**: `GET /admin/stats`
+---
 
 ---
 
@@ -120,6 +108,12 @@ This document outlines the available API endpoints in the `mc_backend_app`, incl
 ### Create Group
 *   **Endpoint**: `POST /groups/create`
 *   **Input**: `{"group_name": "Hajj Group 2024"}`
+*   **Output**: Returns created group object (including `group_code`).
+
+### Join Group
+*   **Endpoint**: `POST /groups/join`
+*   **Input**: `{"group_code": "ABC123"}`
+*   **Description**: Join an existing group as a member using its unique code.
 
 ### Group Dashboard
 *   **Endpoint**: `GET /groups/dashboard`

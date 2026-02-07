@@ -77,8 +77,19 @@ exports.create_group = async (req, res) => {
             return res.status(400).json({ message: "You already have a group with this name" });
         }
 
+        // Generate unique 6-character code
+        // Simple implementation: Random 6 alphanumeric uppercase
+        let group_code;
+        let isUnique = false;
+        while (!isUnique) {
+            group_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            const check = await Group.findOne({ group_code });
+            if (!check) isUnique = true;
+        }
+
         const new_group = await Group.create({
             group_name,
+            group_code,
             moderator_ids: [req.user.id], // The creator is the first moderator
             created_by: req.user.id
         });
@@ -87,6 +98,53 @@ exports.create_group = async (req, res) => {
         delete group_obj.__v;
 
         res.status(201).json(group_obj);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// 1.5 Join Group via Code
+exports.join_group = async (req, res) => {
+    try {
+        const { group_code } = req.body;
+
+        if (!group_code) {
+            return res.status(400).json({ message: "Group code is required" });
+        }
+
+        const group = await Group.findOne({ group_code });
+        if (!group) {
+            return res.status(404).json({ message: "Invalid group code" });
+        }
+
+        // Determine user type (User or Pilgrim) based on role
+        // For now, assuming only Pilgrims join via code for simplicity, 
+        // or Moderators can join distinct groups too?
+        // Let's allow users to join. If they are 'moderator' in general, do they join as pilgrim?
+        // Usually 'join' implies being a member (pilgrim).
+
+        // Check if already in group
+        const is_member = group.pilgrim_ids.some(id => id.toString() === req.user.id) ||
+            group.moderator_ids.some(id => id.toString() === req.user.id);
+
+        if (is_member) {
+            return res.status(400).json({ message: "You are already a member of this group" });
+        }
+
+        // Add to pilgrim_ids (Standard Join)
+        group.pilgrim_ids.push(req.user.id);
+        await group.save();
+
+        res.json({
+            success: true,
+            message: `Successfully joined group: ${group.group_name}`,
+            group: {
+                _id: group._id,
+                group_name: group.group_name,
+                role: 'member'
+            }
+        });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

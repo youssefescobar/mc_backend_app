@@ -13,7 +13,8 @@ exports.register_user = async (req, res) => {
 
         // Check if email is already registered as a verified user
         const existing_user = await User.findOne({ email });
-        if (existing_user) {
+        const existing_pilgrim_email = await Pilgrim.findOne({ email });
+        if (existing_user || existing_pilgrim_email) {
             return res.status(400).json({ message: "Email is already registered" });
         }
 
@@ -26,7 +27,8 @@ exports.register_user = async (req, res) => {
 
         // Check if phone number is already registered
         const existing_phone = await User.findOne({ phone_number });
-        if (existing_phone) {
+        const existing_pilgrim_phone = await Pilgrim.findOne({ phone_number });
+        if (existing_phone || existing_pilgrim_phone) {
             return res.status(400).json({ message: "Phone number is already registered" });
         }
 
