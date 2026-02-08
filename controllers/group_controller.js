@@ -1,6 +1,7 @@
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
 const Pilgrim = require('../models/pilgrim_model');
+const QRCode = require('qrcode');
 // HardwareBand removed
 
 // Get a single group by ID (moderator/admin only)
@@ -100,6 +101,43 @@ exports.create_group = async (req, res) => {
 
         res.status(201).json(group_obj);
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Generate QR Code for a group
+exports.generate_group_qr = async (req, res) => {
+    try {
+        const { group_id } = req.params;
+
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+
+        // Check if user is admin or a moderator of this group
+        const is_admin = req.user.role === 'admin';
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+
+        if (!is_admin && !is_group_moderator) {
+            return res.status(403).json({ message: "Not authorized to access this group" });
+        }
+
+        // Generate QR code as base64 data URL
+        const qrCodeDataURL = await QRCode.toDataURL(group.group_code, {
+            errorCorrectionLevel: 'M',
+            type: 'image/png',
+            width: 300,
+            margin: 2
+        });
+
+        res.json({
+            group_code: group.group_code,
+            qr_code: qrCodeDataURL
+        });
+
+    } catch (error) {
+        console.error("Error generating QR code:", error);
         res.status(500).json({ error: error.message });
     }
 };

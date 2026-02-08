@@ -168,6 +168,18 @@ The `errors` object key represents the field name, and the value is the human-re
 *   **Input**: `{"group_code": "ABC123"}`
 *   **Description**: Join an existing group as a member using its unique code.
 
+### Get Group QR Code
+*   **Endpoint**: `GET /groups/:group_id/qr`
+*   **Description**: Generate QR code for group sharing (Moderators/Admins only)
+*   **Headers**: `Authorization: Bearer <token>`
+*   **Output**: 
+    ```json
+    {
+      "group_code": "ABC123",
+      "qr_code": "data:image/png;base64,..."
+    }
+    ```
+
 ### Group Dashboard
 *   **Endpoint**: `GET /groups/dashboard`
 *   **Output**: Groups managed by the user.

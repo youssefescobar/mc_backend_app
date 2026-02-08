@@ -23,6 +23,7 @@ router.post('/:group_id/remove-pilgrim', authorize('moderator', 'admin'), valida
 router.get('/:group_id', authorize('moderator', 'admin'), group_controller.get_single_group);
 router.put('/:group_id', authorize('moderator', 'admin'), group_controller.update_group_details);
 router.delete('/:group_id', authorize('moderator', 'admin'), group_controller.delete_group);
+router.get('/:group_id/qr', authorize('moderator', 'admin'), group_controller.generate_group_qr);
 router.post('/join', group_controller.join_group);
 // router.delete('/:group_id/moderators/:user_id', authorize('moderator', 'admin'), group_controller.remove_moderator);
 router.post('/:group_id/leave', authorize('moderator', 'admin'), group_controller.leave_group);
