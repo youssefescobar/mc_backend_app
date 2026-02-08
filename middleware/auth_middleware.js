@@ -9,24 +9,13 @@ const protect = async (req, res, next) => {
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        // Fetch full user details (excluding password)
-        let user = await User.findById(decoded.id).select('-password');
+        // Attach decoded token data to req.user
+        // This includes id and role, avoiding unnecessary database lookups
+        req.user = {
+            id: decoded.id,
+            role: decoded.role
+        };
 
-        if (!user) {
-            // Check Pilgrim collection (legacy or separate pilgrims)
-            const Pilgrim = require('../models/pilgrim_model');
-            user = await Pilgrim.findById(decoded.id).select('-password');
-            if (user) {
-                // Ensure role is set for authorization checks
-                user.role = 'pilgrim';
-            }
-        }
-
-        if (!user) {
-            return res.status(401).json({ message: "User not found" });
-        }
-
-        req.user = user;
         next();
     } catch (error) {
         console.error("Auth middleware error:", error);

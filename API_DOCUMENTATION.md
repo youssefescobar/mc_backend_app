@@ -26,21 +26,71 @@ The `errors` object key represents the field name, and the value is the human-re
 
 ## 1. Authentication (`/auth`)
 
-### Register User (General)
+### Register Pilgrim (Public)
 *   **Endpoint**: `POST /auth/register`
-*   **Description**: Registers a new user. Default role is `pilgrim`.
+*   **Description**: Registers a new pilgrim account. Email is optional. No email verification required.
 *   **Input**:
     ```json
     {
-      "full_name": "John Doe",
-      "email": "john@example.com",
+      "full_name": "Ahmed Ali",
+      "national_id": "1234567890",
+      "phone_number": "+966501234567",
       "password": "securepassword123",
-      "phone_number": "+966501234567"
+      "email": "ahmed@example.com",  // Optional
+      "medical_history": "Diabetes",  // Optional
+      "age": 45,  // Optional
+      "gender": "male"  // Optional: 'male', 'female', 'other'
     }
     ```
+*   **Output**: Returns `token`, `role`, `user_id`, `full_name`
 
-### Register Invited Pilgrim
+### Login
+*   **Endpoint**: `POST /auth/login`
+*   **Description**: Login with email, national ID, or phone number
+*   **Input**:
+    ```json
+    {
+      "identifier": "ahmed@example.com",  // Can be email, national_id, or phone_number
+      "password": "securepassword123"
+    }
+    ```
+*   **Output**: Returns `token`, `role`, `user_id`, `full_name`
+
+### Email Management (Protected)
+
+#### Add Email
+*   **Endpoint**: `POST /auth/add-email`
+*   **Description**: Add or update email for pilgrim account
+*   **Headers**: `Authorization: Bearer <token>`
+*   **Input**: `{"email": "newemail@example.com"}`
+
+#### Send Email Verification
+*   **Endpoint**: `POST /auth/send-email-verification`
+*   **Description**: Send 6-digit verification code to pilgrim's email
+*   **Headers**: `Authorization: Bearer <token>`
+
+#### Verify Email
+*   **Endpoint**: `POST /auth/verify-email`
+*   **Description**: Verify email with 6-digit code
+*   **Headers**: `Authorization: Bearer <token>`
+*   **Input**: `{"code": "123456"}`
+
+### Moderator Request (Protected)
+*   **Endpoint**: `POST /auth/request-moderator`
+*   **Description**: Request upgrade to moderator role. Requires verified email.
+*   **Headers**: `Authorization: Bearer <token>`
+*   **Requirements**: 
+    - Must have email on account
+    - Email must be verified
+
+### Profile Management (Protected)
+*   **Get Profile**: `GET /auth/me`
+*   **Update Profile**: `PUT /auth/update-profile` (Multipart form-data: `profile_picture`, `full_name`, `phone_number`)
+*   **Update Location**: `PUT /auth/location` (Input: `latitude`, `longitude`)
+
+### Register Invited Pilgrim (Public)
 *   **Endpoint**: `POST /auth/register-invited-pilgrim`
+*   **Description**: Register via invitation link
 *   **Input**:
     ```json
     {
@@ -51,18 +101,10 @@ The `errors` object key represents the field name, and the value is the human-re
     }
     ```
 
-### Verify Email
-*   **Endpoint**: `POST /auth/verify-email`
-*   **Input**: `{"email": "...", "code": "123456"}`
-
-### Login
-*   **Endpoint**: `POST /auth/login`
-*   **Input**: `{"email": "...", "password": "..."}`
-*   **Output**: Returns `token`, `role`, `user_id`, `full_name`.
-
-### Profile Management
-*   **Get Profile**: `GET /auth/me`
-*   **Update Profile**: `PUT /auth/update-profile` (Multipart form-data: `profile_picture`, `full_name`, `phone_number`)
+### Moderator/Admin Only Endpoints
+*   **Register Pilgrim**: `POST /auth/register-pilgrim` (Create pilgrim for group)
+*   **Search Pilgrims**: `GET /auth/search-pilgrims?query=...&page=1&limit=20`
+*   **Get Pilgrim**: `GET /auth/pilgrims/:pilgrim_id`
 
 ---
 

@@ -1,29 +1,36 @@
 const Joi = require('joi');
 
-// Auth validations
+// Auth validations - Pilgrim Registration
 exports.register_schema = Joi.object({
     full_name: Joi.string().required().min(3).max(100).messages({
         'string.empty': 'Full name is required',
         'string.min': 'Full name must be at least 3 characters',
         'any.required': 'Full name is required'
     }),
-    email: Joi.string().email().required().messages({
-        'string.email': 'Please provide a valid email address',
-        'any.required': 'Email is required'
+    national_id: Joi.string().required().messages({
+        'string.empty': 'National ID is required',
+        'any.required': 'National ID is required'
+    }),
+    phone_number: Joi.string().required().messages({
+        'string.empty': 'Phone number is required',
+        'any.required': 'Phone number is required'
     }),
     password: Joi.string().required().min(6).messages({
         'string.min': 'Password must be at least 6 characters long',
         'any.required': 'Password is required'
     }),
-    phone_number: Joi.string().required().messages({
-        'any.required': 'Phone number is required'
-    })
+    email: Joi.string().email().optional().allow('').messages({
+        'string.email': 'Please provide a valid email address'
+    }),
+    medical_history: Joi.string().optional().allow('').max(500),
+    age: Joi.number().optional().min(0).max(120),
+    gender: Joi.string().optional().valid('male', 'female', 'other')
 });
 
 exports.login_schema = Joi.object({
-    email: Joi.string().email().required().messages({
-        'string.email': 'Please provide a valid email address',
-        'any.required': 'Email is required'
+    identifier: Joi.string().required().messages({
+        'string.empty': 'Email, national ID, or phone number is required',
+        'any.required': 'Email, national ID, or phone number is required'
     }),
     password: Joi.string().required().messages({
         'any.required': 'Password is required'
@@ -37,6 +44,14 @@ exports.register_pilgrim_schema = Joi.object({
     email: Joi.string().optional().email().messages({ 'string.email': 'Invalid email format' }),
     age: Joi.number().optional().min(0).max(120),
     gender: Joi.string().optional().valid('male', 'female', 'other')
+});
+
+exports.update_profile_schema = Joi.object({
+    full_name: Joi.string().optional().min(3).max(100),
+    phone_number: Joi.string().optional(),
+    age: Joi.number().optional().min(0).max(120),
+    gender: Joi.string().optional().valid('male', 'female', 'other'),
+    medical_history: Joi.string().optional().allow('').max(500)
 });
 
 // Group validations
@@ -104,5 +119,29 @@ exports.join_session_schema = Joi.object({
 
 exports.end_session_schema = Joi.object({
     session_id: Joi.string().required().messages({ 'any.required': 'Session ID is required' })
+});
+
+// Email management for pilgrims
+exports.add_email_schema = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please provide a valid email address',
+        'any.required': 'Email is required'
+    })
+});
+
+exports.send_email_verification_schema = Joi.object({
+    // No body needed, uses authenticated user's email
+});
+
+exports.verify_pilgrim_email_schema = Joi.object({
+    code: Joi.string().required().length(6).messages({
+        'string.length': 'Verification code must be 6 digits',
+        'any.required': 'Verification code is required'
+    })
+});
+
+// Moderator request
+exports.request_moderator_schema = Joi.object({
+    // No body needed, uses authenticated user
 });
 
