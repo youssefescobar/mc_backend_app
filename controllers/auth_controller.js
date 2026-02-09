@@ -2,6 +2,7 @@ const User = require('../models/user_model');
 const PendingUser = require('../models/pending_user_model');
 const Pilgrim = require('../models/pilgrim_model');
 const ModeratorRequest = require('../models/moderator_request_model');
+const Notification = require('../models/notification_model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
@@ -172,7 +173,12 @@ exports.login_user = async (req, res) => {
 
         // If not found in Pilgrim, try User collection (for moderators/admins)
         if (!user) {
-            user = await User.findOne({ email: identifier });
+            user = await User.findOne({
+                $or: [
+                    { email: identifier },
+                    { phone_number: identifier }
+                ]
+            });
             if (user) {
                 role = user.role;
             }
@@ -419,6 +425,116 @@ exports.request_moderator = async (req, res) => {
     }
 };
 
+// Admin: get pending moderator requests
+exports.get_pending_moderator_requests = async (req, res) => {
+    try {
+        const requests = await ModeratorRequest.find({ status: 'pending' })
+            .populate('pilgrim_id', 'full_name email phone_number')
+            .sort({ requested_at: -1 });
+
+        res.json({
+            success: true,
+            data: requests
+        });
+    } catch (error) {
+        console.error('Get pending moderator requests error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// Admin: approve moderator request
+exports.approve_moderator_request = async (req, res) => {
+    try {
+        const { request_id } = req.params;
+
+        const request = await ModeratorRequest.findById(request_id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: 'Request already processed' });
+        }
+
+        request.status = 'approved';
+        request.reviewed_at = new Date();
+        request.reviewed_by = req.user.id;
+        await request.save();
+
+        const pilgrim = await Pilgrim.findById(request.pilgrim_id);
+        if (pilgrim) {
+            const existing_user = await User.findById(request.pilgrim_id);
+            if (!existing_user) {
+                await User.create({
+                    _id: pilgrim._id,
+                    full_name: pilgrim.full_name,
+                    email: pilgrim.email,
+                    password: pilgrim.password,
+                    role: 'moderator',
+                    phone_number: pilgrim.phone_number,
+                    active: pilgrim.active
+                });
+                await Pilgrim.findByIdAndDelete(request.pilgrim_id);
+            } else {
+                await User.findByIdAndUpdate(request.pilgrim_id, { role: 'moderator' });
+            }
+        }
+
+        await Notification.create({
+            user_id: request.pilgrim_id,
+            type: 'moderator_request_approved',
+            title: 'Moderator Request Approved',
+            message: 'Your request to become a moderator has been approved. Please log out and log back in to access moderator tools.',
+            data: {
+                request_id: request._id
+            }
+        });
+
+        res.json({ success: true, message: 'Moderator request approved' });
+    } catch (error) {
+        console.error('Approve moderator request error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// Admin: reject moderator request
+exports.reject_moderator_request = async (req, res) => {
+    try {
+        const { request_id } = req.params;
+        const { notes } = req.body;
+
+        const request = await ModeratorRequest.findById(request_id);
+        if (!request) {
+            return res.status(404).json({ message: 'Request not found' });
+        }
+
+        if (request.status !== 'pending') {
+            return res.status(400).json({ message: 'Request already processed' });
+        }
+
+        request.status = 'rejected';
+        request.reviewed_at = new Date();
+        request.reviewed_by = req.user.id;
+        if (notes) request.notes = notes;
+        await request.save();
+
+        await Notification.create({
+            user_id: request.pilgrim_id,
+            type: 'moderator_request_rejected',
+            title: 'Moderator Request Rejected',
+            message: 'Your request to become a moderator was not approved at this time.',
+            data: {
+                request_id: request._id
+            }
+        });
+
+        res.json({ success: true, message: 'Moderator request rejected' });
+    } catch (error) {
+        console.error('Reject moderator request error:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 // Get current user profile
 exports.get_profile = async (req, res) => {
     try {
@@ -431,16 +547,41 @@ exports.get_profile = async (req, res) => {
                 return res.status(404).json({ message: "Profile not found" });
             }
 
-            return res.json(pilgrim);
+            const latest_request = await ModeratorRequest.findOne({ pilgrim_id: req.user.id })
+                .sort({ requested_at: -1 })
+                .select('status');
+
+            const moderator_request_status = latest_request?.status || null;
+
+            return res.json({
+                ...pilgrim.toObject(),
+                moderator_request_status,
+                pending_moderator_request: moderator_request_status === 'pending'
+            });
         } else {
             // Query User collection (moderator/admin)
             const user = await User.findById(req.user.id).select('_id full_name email role phone_number profile_picture created_at');
 
-            if (!user) {
+            if (user) {
+                return res.json(user);
+            }
+
+            // Fallback: approved moderators may still exist in Pilgrim collection
+            const pilgrim = await Pilgrim.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified role created_at');
+            if (!pilgrim) {
                 return res.status(404).json({ message: "Profile not found" });
             }
 
-            return res.json(user);
+            const pending_request = await ModeratorRequest.exists({
+                pilgrim_id: req.user.id,
+                status: 'pending'
+            });
+
+            return res.json({
+                ...pilgrim.toObject(),
+                moderator_request_status: null,
+                pending_moderator_request: Boolean(pending_request)
+            });
         }
     } catch (error) {
         console.error('Get profile error:', error);

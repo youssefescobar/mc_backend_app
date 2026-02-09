@@ -34,6 +34,11 @@ router.post('/verify-email', validate(verify_pilgrim_email_schema), auth_ctrl.ve
 // Moderator request
 router.post('/request-moderator', validate(request_moderator_schema), auth_ctrl.request_moderator);
 
+// Admin: review moderator requests
+router.get('/moderator-requests', authorize('admin'), auth_ctrl.get_pending_moderator_requests);
+router.put('/moderator-requests/:request_id/approve', authorize('admin'), auth_ctrl.approve_moderator_request);
+router.put('/moderator-requests/:request_id/reject', authorize('admin'), auth_ctrl.reject_moderator_request);
+
 // Moderator/Admin routes
 router.post('/register-pilgrim', authorize('moderator', 'admin'), validate(require('../middleware/schemas').register_pilgrim_schema), auth_ctrl.register_pilgrim);
 router.get('/search-pilgrims', authorize('moderator', 'admin'), searchLimiter, auth_ctrl.search_pilgrims);

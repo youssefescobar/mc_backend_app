@@ -1,72 +1,10 @@
 const crypto = require('crypto');
+const User = require('../models/user_model');
+const Invitation = require('../models/invitation_model');
+const Group = require('../models/group_model');
+const Notification = require('../models/notification_model');
 const PendingPilgrim = require('../models/pending_pilgrim_model');
-const { sendGroupInvitationEmail, sendPilgrimInvitationEmail } = require('../config/email_service');
-
-// ... existing code ...
-
-// Invite a pilgrim to the group
-const invite_pilgrim = async (req, res) => {
-    try {
-        const { group_id } = req.params;
-        const { email } = req.body;
-        const inviter_id = req.user.id;
-
-        // 1. Verify Inviter is Moderator of Group
-        const group = await Group.findById(group_id);
-        if (!group) {
-            return res.status(404).json({ success: false, message: 'Group not found' });
-        }
-
-        const is_moderator = group.moderator_ids.some(id => id.toString() === inviter_id.toString()) ||
-            group.created_by.toString() === inviter_id.toString();
-
-        if (!is_moderator) {
-            return res.status(403).json({ success: false, message: 'Only group moderators can invite pilgrims' });
-        }
-
-        // 2. Check if already a pending pilgrim
-        const existing_pending = await PendingPilgrim.findOne({ email: email.toLowerCase(), group_id });
-        if (existing_pending) {
-            return res.status(400).json({ success: false, message: 'Pilgrim already invited to this group' });
-        }
-
-        // 3. Check if already a registered pilgrim (optional: redirect to login info)
-        // For now, we allow sending invite even if registered, so they can be added to group simply?
-        // Actually, better to check. If registered, use the "Add Pilgrim" flow instead.
-        // But for "Invitation" flow, we assume they are new to the app or this specific group flow.
-
-        // 4. Generate Token
-        const token = crypto.randomBytes(32).toString('hex');
-        const expires_at = new Date();
-        expires_at.setDate(expires_at.getDate() + 7); // 7 days expiry
-
-        // 5. Create Pending Pilgrim Record
-        await PendingPilgrim.create({
-            email: email.toLowerCase(),
-            group_id,
-            invited_by: inviter_id,
-            verification_token: token,
-            expires_at
-        });
-
-        // 6. Send Email with Deep Link
-        const inviter = await User.findById(inviter_id);
-        const deepLink = `mc_mobile://pilgrim-signup?token=${token}`; // Deep link scheme
-
-        await sendPilgrimInvitationEmail(email.toLowerCase(), inviter.full_name, group.group_name, deepLink);
-
-        res.status(201).json({
-            success: true,
-            message: 'Pilgrim invitation sent successfully'
-        });
-
-    } catch (error) {
-        console.error('Invite pilgrim error:', error);
-        res.status(500).json({ success: false, message: 'Failed to invite pilgrim' });
-    }
-};
-
-// (Moved export to end of file)
+const { sendGroupInvitationEmail } = require('../config/email_service');
 
 // Send invitation to another moderator
 const send_invitation = async (req, res) => {
@@ -154,6 +92,8 @@ const accept_invitation = async (req, res) => {
     try {
         const { id } = req.params;
         const user_id = req.user.id;
+        const user = await User.findById(user_id).select('email');
+        const user_email = user?.email ? user.email.toLowerCase() : null;
 
         const invitation = await Invitation.findById(id).populate('group_id');
         if (!invitation) {
@@ -162,7 +102,7 @@ const accept_invitation = async (req, res) => {
 
         // Verify this invitation belongs to the current user
         if (invitation.invitee_id?.toString() !== user_id.toString() &&
-            invitation.invitee_email !== req.user.email.toLowerCase()) {
+            (!user_email || invitation.invitee_email !== user_email)) {
             return res.status(403).json({ success: false, message: 'This invitation is not for you' });
         }
 
@@ -214,6 +154,8 @@ const decline_invitation = async (req, res) => {
     try {
         const { id } = req.params;
         const user_id = req.user.id;
+        const user = await User.findById(user_id).select('email');
+        const user_email = user?.email ? user.email.toLowerCase() : null;
 
         const invitation = await Invitation.findById(id).populate('group_id');
         if (!invitation) {
@@ -222,7 +164,7 @@ const decline_invitation = async (req, res) => {
 
         // Verify this invitation belongs to the current user
         if (invitation.invitee_id?.toString() !== user_id.toString() &&
-            invitation.invitee_email !== req.user.email.toLowerCase()) {
+            (!user_email || invitation.invitee_email !== user_email)) {
             return res.status(403).json({ success: false, message: 'This invitation is not for you' });
         }
 
@@ -267,13 +209,16 @@ const decline_invitation = async (req, res) => {
 const get_my_invitations = async (req, res) => {
     try {
         const user_id = req.user.id;
-        const user_email = req.user.email.toLowerCase();
+        const user = await User.findById(user_id).select('email');
+        const user_email = user?.email ? user.email.toLowerCase() : null;
+
+        const orFilters = [{ invitee_id: user_id }];
+        if (user_email) {
+            orFilters.push({ invitee_email: user_email });
+        }
 
         const invitations = await Invitation.find({
-            $or: [
-                { invitee_id: user_id },
-                { invitee_email: user_email }
-            ],
+            $or: orFilters,
             status: 'pending'
         })
             .populate('group_id', 'group_name')
@@ -294,6 +239,5 @@ module.exports = {
     send_invitation,
     accept_invitation,
     decline_invitation,
-    get_my_invitations,
-    invite_pilgrim
+    get_my_invitations
 };

@@ -51,13 +51,75 @@ exports.send_message = async (req, res) => {
     }
 };
 
+// Send an individual message to a pilgrim (Text, Voice, Image, or TTS)
+exports.send_individual_message = async (req, res) => {
+    try {
+        const { group_id, recipient_id, type, content, is_urgent, original_text } = req.body;
+        const file = req.file;
+
+        if (!group_id || !recipient_id) {
+            return res.status(400).json({ message: "Group ID and recipient ID are required" });
+        }
+
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+
+        const isModerator = group.moderator_ids.some(id => id.toString() === req.user.id) ||
+            group.created_by.toString() === req.user.id;
+        if (!isModerator) {
+            return res.status(403).json({ message: "Not authorized to send messages in this group" });
+        }
+
+        const isRecipientInGroup = group.pilgrim_ids.some(id => id.toString() === recipient_id);
+        if (!isRecipientInGroup) {
+            return res.status(400).json({ message: "Recipient is not in this group" });
+        }
+
+        let media_url = null;
+        if (type === 'voice' || type === 'image') {
+            if (!file) {
+                return res.status(400).json({ message: "Media file is required for voice/image messages" });
+            }
+            media_url = file.filename;
+        }
+
+        const sender_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
+
+        const message = await Message.create({
+            group_id,
+            recipient_id,
+            sender_id: req.user.id,
+            sender_model,
+            type: type || 'text',
+            content,
+            media_url,
+            is_urgent: is_urgent || false,
+            original_text: type === 'tts' ? original_text : undefined
+        });
+
+        await message.populate('sender_id', 'full_name profile_picture role');
+
+        res.status(201).json({
+            success: true,
+            data: message
+        });
+    } catch (error) {
+        console.error('Send individual message error:', error);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
 // Get messages for a group
 exports.get_group_messages = async (req, res) => {
     try {
         const { group_id } = req.params;
         const { limit = 50, before } = req.query; // Pagination using timestamp
 
-        const query = { group_id };
+        const query = req.user.role === 'pilgrim'
+            ? { group_id, $or: [{ recipient_id: null }, { recipient_id: req.user.id }] }
+            : { group_id };
         if (before) {
             query.created_at = { $lt: new Date(before) };
         }
@@ -111,6 +173,47 @@ exports.delete_message = async (req, res) => {
 
     } catch (error) {
         console.error('Delete message error:', error);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Get unread message count for a pilgrim in a group
+exports.get_unread_count = async (req, res) => {
+    try {
+        const { group_id } = req.params;
+        const pilgrimId = req.user.id;
+
+        const count = await Message.countDocuments({
+            group_id,
+            $or: [{ recipient_id: null }, { recipient_id: pilgrimId }],
+            read_by: { $ne: pilgrimId }
+        });
+
+        res.json({ success: true, unread_count: count });
+    } catch (error) {
+        console.error('Get unread count error:', error);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Mark all messages in a group as read for this pilgrim
+exports.mark_read = async (req, res) => {
+    try {
+        const { group_id } = req.params;
+        const pilgrimId = req.user.id;
+
+        await Message.updateMany(
+            {
+                group_id,
+                $or: [{ recipient_id: null }, { recipient_id: pilgrimId }],
+                read_by: { $ne: pilgrimId }
+            },
+            { $addToSet: { read_by: pilgrimId } }
+        );
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Mark read error:', error);
         res.status(500).json({ message: "Server error" });
     }
 };

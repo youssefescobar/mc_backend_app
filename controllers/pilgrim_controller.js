@@ -1,5 +1,6 @@
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
+const Pilgrim = require('../models/pilgrim_model');
 const Notification = require('../models/notification_model');
 
 // Get pilgrim profile
@@ -60,21 +61,28 @@ exports.update_location = async (req, res) => {
             return res.status(400).json({ message: 'Latitude and longitude required' });
         }
 
-        // Update User model directly
-        const pilgrim = await User.findByIdAndUpdate(
+        let pilgrim = await Pilgrim.findByIdAndUpdate(
             req.user.id,
             {
                 current_latitude: latitude,
                 current_longitude: longitude,
                 last_location_update: new Date(),
-                // User model doesn't explicitly have battery_percent in schema shown, 
-                // but we can add it or ignore it if not in schema. 
-                // Actually, let's try to save it if schema allows or it's flexible.
-                // Looking at user_model.js, it DOES have location but NO battery_percent.
-                // We'll proceed with location update.
+                ...(battery_percent !== undefined && { battery_percent })
             },
             { new: true }
         );
+
+        if (!pilgrim) {
+            pilgrim = await User.findByIdAndUpdate(
+                req.user.id,
+                {
+                    current_latitude: latitude,
+                    current_longitude: longitude,
+                    last_location_update: new Date()
+                },
+                { new: true }
+            );
+        }
 
         if (!pilgrim) {
             return res.status(404).json({ message: 'User not found' });
@@ -111,16 +119,21 @@ exports.trigger_sos = async (req, res) => {
         }
 
         // Create notifications for all moderators in the group
-        const moderatorIds = [group.created_by, ...group.moderator_ids.map(m => m._id)];
+        const moderatorIdsSet = new Set(
+            [group.created_by?.toString(), ...group.moderator_ids.map(m => m._id?.toString())]
+                .filter(Boolean)
+        );
+        const moderatorIds = Array.from(moderatorIdsSet);
 
         const notifications = moderatorIds.map(modId => ({
-            user: modId,
+            user_id: modId,
             type: 'sos_alert',
-            title: '🚨 SOS EMERGENCY',
-            message: `${pilgrim.full_name} has triggered an emergency SOS alert!`,
+            title: 'Lost Pilgrim Alert',
+            message: `${pilgrim.full_name} reported they are lost and needs help.`,
             data: {
                 pilgrim_id: pilgrim._id,
                 pilgrim_name: pilgrim.full_name,
+                pilgrim_phone: pilgrim.phone_number,
                 location: {
                     lat: pilgrim.current_latitude,
                     lng: pilgrim.current_longitude

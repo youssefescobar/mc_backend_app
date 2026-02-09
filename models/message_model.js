@@ -6,6 +6,11 @@ const message_schema = new mongoose.Schema({
         ref: 'Group',
         required: true
     },
+    recipient_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Pilgrim',
+        default: null
+    },
     sender_id: {
         type: mongoose.Schema.Types.ObjectId,
         required: true,
@@ -37,6 +42,10 @@ const message_schema = new mongoose.Schema({
         type: String,
         required: function () { return this.type === 'tts'; }
     },
+    read_by: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Pilgrim'
+    }],
     created_at: {
         type: Date,
         default: Date.now

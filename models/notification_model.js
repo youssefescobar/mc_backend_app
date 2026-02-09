@@ -8,7 +8,16 @@ const notification_schema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['group_invitation', 'invitation_accepted', 'invitation_declined', 'moderator_removed', 'moderator_left'],
+        enum: [
+            'group_invitation',
+            'invitation_accepted',
+            'invitation_declined',
+            'moderator_removed',
+            'moderator_left',
+            'moderator_request_approved',
+            'moderator_request_rejected',
+            'sos_alert'
+        ],
         required: true
     },
     title: {
@@ -24,12 +33,26 @@ const notification_schema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Invitation'
         },
+        request_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'ModeratorRequest'
+        },
         group_id: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Group'
         },
         group_name: String,
-        inviter_name: String
+        inviter_name: String,
+        pilgrim_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Pilgrim'
+        },
+        pilgrim_name: String,
+        pilgrim_phone: String,
+        location: {
+            lat: Number,
+            lng: Number
+        }
     },
     read: {
         type: Boolean,

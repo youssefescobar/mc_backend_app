@@ -319,52 +319,35 @@ exports.send_individual_alert = async (req, res) => {
 exports.add_pilgrim_to_group = async (req, res) => {
     try {
         const { group_id } = req.params;
-        const { full_name, national_id, phone_number, age, gender, medical_history } = req.body;
+        const { identifier } = req.body;
 
-        console.log(`[Add Pilgrim] Adding to group ${group_id}:`, { full_name, national_id, phone_number });
-
-        // Build query to check if exists
-        const orConditions = [{ national_id }];
-        if (phone_number && phone_number.trim() !== '') {
-            orConditions.push({ phone_number: phone_number.trim() });
+        if (!identifier || identifier.trim() === '') {
+            return res.status(400).json({ message: "Email, phone number, or national ID is required." });
         }
 
-        let pilgrim = await Pilgrim.findOne({ $or: orConditions });
+        const existing_pilgrim = await Pilgrim.findOne({
+            $or: [
+                { email: identifier.trim().toLowerCase() },
+                { phone_number: identifier.trim() },
+                { national_id: identifier.trim() }
+            ]
+        });
 
-        if (!pilgrim) {
-            console.log('[Add Pilgrim] Creating new pilgrim...');
-
-            // Prepare data, excluding empty strings for unique fields
-            const pilgrimData = {
-                full_name,
-                national_id,
-                age: age || 30,
-                gender: gender || 'male',
-                medical_history: medical_history || 'None',
-                created_by: req.user.id
-            };
-
-            if (phone_number && phone_number.trim() !== '') {
-                pilgrimData.phone_number = phone_number.trim();
-            }
-
-            pilgrim = await Pilgrim.create(pilgrimData);
-        } else {
-            console.log('[Add Pilgrim] Found existing pilgrim:', pilgrim._id);
+        if (!existing_pilgrim) {
+            return res.status(404).json({ message: "No registered pilgrim found with that email, phone number, or national ID." });
         }
 
         const updated_group = await Group.findByIdAndUpdate(
             group_id,
-            { $addToSet: { pilgrim_ids: pilgrim._id } },
+            { $addToSet: { pilgrim_ids: existing_pilgrim._id } },
             { new: true }
         ).populate('pilgrim_ids', 'full_name email phone_number national_id age gender location battery_percent last_location_update');
 
         if (!updated_group) {
-            console.error('[Add Pilgrim] Group not found');
             return res.status(404).json({ message: "Group not found" });
         }
 
-        res.json({
+        return res.json({
             message: "Pilgrim added to group",
             success: true,
             group: {
