@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const path = require('path');
 
 // Create transporter with Gmail SMTP
 const transporter = nodemailer.createTransport({
@@ -45,9 +46,10 @@ const sendVerificationEmail = async (to, code, fullName) => {
                             <table role="presentation" style="width: 600px; border-collapse: collapse; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                                 <!-- Header -->
                                 <tr>
-                                    <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); border-radius: 12px 12px 0 0;">
-                                        <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Munawwara Care</h1>
-                                        <p style="margin: 10px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Hajj & Umrah Management System</p>
+                                    <td style="padding: 40px 40px 20px; text-align: center; border-radius: 12px 12px 0 0;">
+                                        <img src="cid:logo" alt="Munawwara Care" style="width: 100px; height: auto; margin-bottom: 20px;">
+                                        <h1 style="margin: 0; color: #1e40af; font-size: 28px; font-weight: 700;">Munawwara Care</h1>
+                                        <p style="margin: 10px 0 0; color: #4b5563; font-size: 14px; opacity: 0.9;">Hajj & Umrah Management System</p>
                                     </td>
                                 </tr>
                                 <!-- Content -->
@@ -85,7 +87,12 @@ const sendVerificationEmail = async (to, code, fullName) => {
                 </table>
             </body>
             </html>
-        `
+        `,
+        attachments: [{
+            filename: 'logo.jpeg',
+            path: path.join(__dirname, '../uploads/logo.jpeg'),
+            cid: 'logo'
+        }]
     };
 
     try {
@@ -120,9 +127,10 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
                             <table role="presentation" style="width: 600px; border-collapse: collapse; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
                                 <!-- Header -->
                                 <tr>
-                                    <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); border-radius: 12px 12px 0 0;">
-                                        <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Munawwara Care</h1>
-                                        <p style="margin: 10px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Hajj & Umrah Management System</p>
+                                    <td style="padding: 40px 40px 20px; text-align: center; border-radius: 12px 12px 0 0;">
+                                        <img src="cid:logo" alt="Munawwara Care" style="width: 100px; height: auto; margin-bottom: 20px;">
+                                        <h1 style="margin: 0; color: #1e40af; font-size: 28px; font-weight: 700;">Munawwara Care</h1>
+                                        <p style="margin: 10px 0 0; color: #4b5563; font-size: 14px; opacity: 0.9;">Hajj & Umrah Management System</p>
                                     </td>
                                 </tr>
                                 <!-- Content -->
@@ -139,7 +147,7 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
                                                 ${inviterProfilePic ?
                 `<img src="http://192.168.1.13:5000/uploads/${inviterProfilePic}" alt="${inviterName}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 3px solid #3b82f6; margin-bottom: 15px;">`
                 :
-                `<div style="width: 80px; height: 80px; border-radius: 50%; background-color: #3b82f6; color: white; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; margin: 0 auto 15px;">${inviterName.charAt(0)}</div>`
+                `<div style="width: 80px; height: 80px; border-radius: 50%; background-color: #3b82f6; color: white; line-height: 80px; text-align: center; font-size: 32px; font-weight: bold; margin: 0 auto 15px;">${inviterName.charAt(0)}</div>`
             }
                                                 <div style="background-color: #eff6ff; border: 2px solid #3b82f6; border-radius: 8px; padding: 15px 30px; margin-top: 10px;">
                                                     <span style="font-size: 20px; font-weight: 600; color: #1e40af;">${groupName}</span>
@@ -174,7 +182,12 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
                 </table>
             </body>
             </html>
-        `
+        `,
+        attachments: [{
+            filename: 'logo.jpeg',
+            path: path.join(__dirname, '../uploads/logo.jpeg'),
+            cid: 'logo'
+        }]
     };
 
     try {
@@ -196,6 +209,7 @@ const sendPilgrimInvitationEmail = async (to, inviterName, groupName, deepLink) 
         html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
                 <div style="text-align: center; margin-bottom: 30px;">
+                    <img src="cid:logo" alt="Munawwara Care" style="width: 100px; height: auto; margin-bottom: 20px;">
                     <h1 style="color: #2563eb; margin: 0;">Munawwara Care</h1>
                     <p style="color: #666; margin-top: 5px;">Hajj & Umrah Companion</p>
                 </div>
@@ -226,7 +240,12 @@ const sendPilgrimInvitationEmail = async (to, inviterName, groupName, deepLink) 
                     <p>&copy; ${new Date().getFullYear()} Munawwara Care. All rights reserved.</p>
                 </div>
             </div>
-        `
+        `,
+        attachments: [{
+            filename: 'logo.jpeg',
+            path: path.join(__dirname, '../uploads/logo.jpeg'),
+            cid: 'logo'
+        }]
     };
 
     try {

@@ -12,6 +12,19 @@ const notification_routes = require('./routes/notification_routes');
 const pilgrim_routes = require('./routes/pilgrim_routes');
 
 const app = express();
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require("socket.io");
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+const { initializeSockets } = require('./sockets/socket_manager');
+
+// Initialize Sockets
+initializeSockets(io);
 
 // Middleware
 app.use(cors({
@@ -46,4 +59,4 @@ app.use((err, req, res, next) => {
 app.get('/', (req, res) => res.send("Hajj App Backend Running"));
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
