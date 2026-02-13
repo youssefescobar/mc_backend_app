@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const User = require('../models/user_model');
+const Pilgrim = require('../models/pilgrim_model');
 const Invitation = require('../models/invitation_model');
 const Group = require('../models/group_model');
 const Notification = require('../models/notification_model');
@@ -26,12 +27,18 @@ const send_invitation = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Only group moderators can send invitations' });
         }
 
-        // Check if user exists
+        // Check if user exists (as moderator/admin or as pilgrim)
         const invitee = await User.findOne({ email: email.toLowerCase() });
+        const invitee_pilgrim = !invitee ? await Pilgrim.findOne({ email: email.toLowerCase() }) : null;
 
         // Check if already a moderator
         if (invitee && group.moderator_ids.some(id => id.toString() === invitee._id.toString())) {
             return res.status(400).json({ success: false, message: 'User is already a moderator of this group' });
+        }
+
+        // Check if pilgrim is already in the group
+        if (invitee_pilgrim && group.pilgrim_ids.some(id => id.toString() === invitee_pilgrim._id.toString())) {
+            return res.status(400).json({ success: false, message: 'This pilgrim is already a member of this group' });
         }
 
         // Check for existing pending invitation
@@ -46,20 +53,22 @@ const send_invitation = async (req, res) => {
         }
 
         // Create invitation
+        const invitee_ref_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
         const invitation = await Invitation.create({
             group_id,
             inviter_id,
-            invitee_id: invitee ? invitee._id : null,
+            invitee_id: invitee_ref_id,
             invitee_email: email.toLowerCase()
         });
 
         // Get inviter info for email/notification
         const inviter = await User.findById(inviter_id);
 
-        // Create notification for invitee if registered
-        if (invitee) {
+        // Create notification for invitee if registered (moderator or pilgrim)
+        const notify_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
+        if (notify_id) {
             await Notification.create({
-                user_id: invitee._id,
+                user_id: notify_id,
                 type: 'group_invitation',
                 title: 'Group Invitation',
                 message: `${inviter.full_name} invited you to join "${group.group_name}"`,
@@ -92,8 +101,11 @@ const accept_invitation = async (req, res) => {
     try {
         const { id } = req.params;
         const user_id = req.user.id;
+        // Look up in both User and Pilgrim collections
         const user = await User.findById(user_id).select('email');
-        const user_email = user?.email ? user.email.toLowerCase() : null;
+        const pilgrim_account = !user ? await Pilgrim.findById(user_id).select('email') : null;
+        const account = user || pilgrim_account;
+        const user_email = account?.email ? account.email.toLowerCase() : null;
 
         const invitation = await Invitation.findById(id).populate('group_id');
         if (!invitation) {
@@ -110,10 +122,19 @@ const accept_invitation = async (req, res) => {
             return res.status(400).json({ success: false, message: `Invitation is already ${invitation.status}` });
         }
 
-        // Add user to group moderators
-        await Group.findByIdAndUpdate(invitation.group_id._id, {
-            $addToSet: { moderator_ids: user_id }
-        });
+        // Determine if the user is a moderator or pilgrim and add accordingly
+        const accepting_user = await User.findById(user_id);
+        if (accepting_user) {
+            // User is a moderator/admin — add to moderator_ids
+            await Group.findByIdAndUpdate(invitation.group_id._id, {
+                $addToSet: { moderator_ids: user_id }
+            });
+        } else {
+            // User is a pilgrim — add to pilgrim_ids
+            await Group.findByIdAndUpdate(invitation.group_id._id, {
+                $addToSet: { pilgrim_ids: user_id }
+            });
+        }
 
         // Update invitation status
         invitation.status = 'accepted';
@@ -138,9 +159,10 @@ const accept_invitation = async (req, res) => {
             }
         });
 
+        const role_label = accepting_user ? 'moderator' : 'member';
         res.json({
             success: true,
-            message: 'Invitation accepted! You are now a moderator of this group.',
+            message: `Invitation accepted! You are now a ${role_label} of this group.`,
             group_id: invitation.group_id._id
         });
     } catch (error) {
@@ -154,8 +176,11 @@ const decline_invitation = async (req, res) => {
     try {
         const { id } = req.params;
         const user_id = req.user.id;
+        // Look up in both User and Pilgrim collections
         const user = await User.findById(user_id).select('email');
-        const user_email = user?.email ? user.email.toLowerCase() : null;
+        const pilgrim_account = !user ? await Pilgrim.findById(user_id).select('email') : null;
+        const account = user || pilgrim_account;
+        const user_email = account?.email ? account.email.toLowerCase() : null;
 
         const invitation = await Invitation.findById(id).populate('group_id');
         if (!invitation) {
@@ -209,8 +234,11 @@ const decline_invitation = async (req, res) => {
 const get_my_invitations = async (req, res) => {
     try {
         const user_id = req.user.id;
+        // Look up in both User and Pilgrim collections
         const user = await User.findById(user_id).select('email');
-        const user_email = user?.email ? user.email.toLowerCase() : null;
+        const pilgrim_account = !user ? await Pilgrim.findById(user_id).select('email') : null;
+        const account = user || pilgrim_account;
+        const user_email = account?.email ? account.email.toLowerCase() : null;
 
         const orFilters = [{ invitee_id: user_id }];
         if (user_email) {

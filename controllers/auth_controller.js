@@ -736,7 +736,7 @@ exports.register_invited_pilgrim = async (req, res) => {
 
         // 4. Add Pilgrim to Group
         await Group.findByIdAndUpdate(pending_pilgrim.group_id, {
-            $addToSet: { pilgrims: pilgrim._id }
+            $addToSet: { pilgrim_ids: pilgrim._id }
         });
 
         // 5. Delete Pending Record
