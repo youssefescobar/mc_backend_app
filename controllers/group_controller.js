@@ -156,11 +156,10 @@ exports.join_group = async (req, res) => {
             return res.status(404).json({ message: "Invalid group code" });
         }
 
-        // Determine user type (User or Pilgrim) based on role
-        // For now, assuming only Pilgrims join via code for simplicity, 
-        // or Moderators can join distinct groups too?
-        // Let's allow users to join. If they are 'moderator' in general, do they join as pilgrim?
-        // Usually 'join' implies being a member (pilgrim).
+        // Only pilgrims can join groups via code
+        if (req.user.role !== 'pilgrim') {
+            return res.status(403).json({ message: "Only pilgrims can join groups via code. Moderators must be invited." });
+        }
 
         // Check if already in group
         const is_member = group.pilgrim_ids.some(id => id.toString() === req.user.id) ||
@@ -170,7 +169,7 @@ exports.join_group = async (req, res) => {
             return res.status(400).json({ message: "You are already a member of this group" });
         }
 
-        // Add to pilgrim_ids (Standard Join)
+        // Add to pilgrim_ids
         group.pilgrim_ids.push(req.user.id);
         await group.save();
 
@@ -510,7 +509,7 @@ exports.leave_group = async (req, res) => {
 exports.update_group_details = async (req, res) => {
     try {
         const { group_id } = req.params;
-        const { group_name } = req.body;
+        const { group_name, allow_pilgrim_navigation } = req.body;
 
         const group = await Group.findById(group_id);
         if (!group) {
@@ -537,6 +536,9 @@ exports.update_group_details = async (req, res) => {
         }
 
         group.group_name = group_name || group.group_name;
+        if (typeof allow_pilgrim_navigation === 'boolean') {
+            group.allow_pilgrim_navigation = allow_pilgrim_navigation;
+        }
         await group.save();
 
         const updated_group = await Group.findById(group_id)

@@ -44,7 +44,8 @@ exports.get_my_group = async (req, res) => {
             group_id: group._id,
             created_by: group.created_by,
             moderators: group.moderator_ids,
-            pilgrim_count: group.pilgrim_ids?.length || 0
+            pilgrim_count: group.pilgrim_ids?.length || 0,
+            allow_pilgrim_navigation: group.allow_pilgrim_navigation || false
         });
     } catch (error) {
         console.error('Get my group error:', error);

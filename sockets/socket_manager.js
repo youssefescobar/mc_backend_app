@@ -40,6 +40,42 @@ const initializeSockets = (io) => {
             }
         });
 
+        // --- WebRTC Signaling for Calls ---
+        // Map of userId <-> socketId (for direct signaling)
+        socket.on('register-user', ({ userId }) => {
+            socket.data.userId = userId;
+        });
+
+        // Helper to find socket by userId
+        function getSocketByUserId(userId) {
+            return Array.from(io.sockets.sockets.values()).find(s => s.data.userId === userId);
+        }
+
+        socket.on('call-offer', ({ to, offer }) => {
+            const target = getSocketByUserId(to);
+            if (target) {
+                target.emit('call-offer', { offer, from: socket.data.userId });
+            }
+        });
+        socket.on('call-answer', ({ to, answer }) => {
+            const target = getSocketByUserId(to);
+            if (target) {
+                target.emit('call-answer', { answer, from: socket.data.userId });
+            }
+        });
+        socket.on('ice-candidate', ({ to, candidate }) => {
+            const target = getSocketByUserId(to);
+            if (target) {
+                target.emit('ice-candidate', { candidate, from: socket.data.userId });
+            }
+        });
+        socket.on('call-end', ({ to }) => {
+            const target = getSocketByUserId(to);
+            if (target) {
+                target.emit('call-end', { from: socket.data.userId });
+            }
+        });
+
         socket.on('disconnect', () => {
             console.log(`[Socket] User disconnected: ${socket.id}`);
         });

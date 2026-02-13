@@ -30,6 +30,7 @@ router.put('/location', auth_ctrl.update_location);
 // Email management for pilgrims
 router.post('/add-email', validate(add_email_schema), auth_ctrl.add_email);
 router.post('/send-email-verification', auth_ctrl.send_email_verification);
+router.post('/resend-verification', auth_ctrl.send_email_verification); // Alias used by VerifyEmailScreen
 router.post('/verify-email', validate(verify_pilgrim_email_schema), auth_ctrl.verify_pilgrim_email);
 
 // Moderator request
