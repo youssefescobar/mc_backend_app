@@ -42,6 +42,9 @@ app.use(http_logger);
 connectDB();
 
 // Routes
+const push_notification_routes = require('./routes/push_notification_routes');
+app.use('/api/push', push_notification_routes);
+
 app.use('/api/auth', auth_routes);
 app.use('/api/groups', group_routes);
 app.use('/api', invitation_routes);
