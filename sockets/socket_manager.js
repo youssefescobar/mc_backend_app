@@ -83,9 +83,9 @@ const initializeSockets = (io) => {
                 };
 
                 // Always fetch recipient for potential push notification
-                let recipient = await User.findById(to).select('fcm_token full_name');
+                let recipient = await User.findById(to).select('fcm_token full_name role');
                 if (!recipient) {
-                    recipient = await Pilgrim.findById(to).select('fcm_token full_name');
+                    recipient = await Pilgrim.findById(to).select('fcm_token full_name role');
                 }
 
                 // Create call history record

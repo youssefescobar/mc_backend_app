@@ -44,6 +44,10 @@ const callHistorySchema = new mongoose.Schema({
     ended_at: {
         type: Date,
         default: null
+    },
+    is_read: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true // Adds createdAt and updatedAt

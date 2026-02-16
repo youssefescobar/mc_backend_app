@@ -6,7 +6,8 @@ const {
     mark_as_read,
     mark_all_read,
     delete_notification,
-    delete_read_notifications
+    delete_read_notifications,
+    get_unread_count
 } = require('../controllers/notification_controller');
 
 // All routes require authentication
@@ -14,6 +15,9 @@ router.use(protect);
 
 // Get notifications
 router.get('/', get_notifications);
+
+// Get unread count
+router.get('/unread-count', get_unread_count);
 
 // Mark single notification as read
 router.put('/:id/read', mark_as_read);
