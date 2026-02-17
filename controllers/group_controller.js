@@ -1,6 +1,7 @@
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
 const Pilgrim = require('../models/pilgrim_model');
+const SuggestedArea = require('../models/suggested_area_model');
 const QRCode = require('qrcode');
 // HardwareBand removed
 
@@ -553,6 +554,98 @@ exports.update_group_details = async (req, res) => {
 
     } catch (error) {
         console.error("Error in update_group_details:", error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ============ SUGGESTED AREAS ============
+
+// Add a suggested area to a group
+exports.add_suggested_area = async (req, res) => {
+    try {
+        const { group_id } = req.params;
+        const { name, description, latitude, longitude } = req.body;
+
+        if (!name || latitude === undefined || longitude === undefined) {
+            return res.status(400).json({ message: "Name, latitude, and longitude are required" });
+        }
+
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+        if (!is_group_moderator && req.user.role !== 'admin') {
+            return res.status(403).json({ message: "Not authorized" });
+        }
+
+        const area = await SuggestedArea.create({
+            group_id,
+            created_by: req.user.id,
+            name: name.trim(),
+            description: (description || '').trim(),
+            latitude,
+            longitude
+        });
+
+        res.status(201).json({ success: true, area });
+    } catch (error) {
+        console.error("Error in add_suggested_area:", error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Get all active suggested areas for a group
+exports.get_suggested_areas = async (req, res) => {
+    try {
+        const { group_id } = req.params;
+
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+
+        const areas = await SuggestedArea.find({ group_id, active: true })
+            .populate('created_by', 'full_name')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        res.json({ success: true, areas });
+    } catch (error) {
+        console.error("Error in get_suggested_areas:", error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// Delete (soft) a suggested area
+exports.delete_suggested_area = async (req, res) => {
+    try {
+        const { group_id, area_id } = req.params;
+
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+        if (!is_group_moderator && req.user.role !== 'admin') {
+            return res.status(403).json({ message: "Not authorized" });
+        }
+
+        const area = await SuggestedArea.findOneAndUpdate(
+            { _id: area_id, group_id, active: true },
+            { active: false },
+            { new: true }
+        );
+
+        if (!area) {
+            return res.status(404).json({ message: "Suggested area not found" });
+        }
+
+        res.json({ success: true, message: "Suggested area removed" });
+    } catch (error) {
+        console.error("Error in delete_suggested_area:", error);
         res.status(500).json({ error: error.message });
     }
 };
