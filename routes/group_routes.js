@@ -28,4 +28,9 @@ router.post('/join', group_controller.join_group);
 // router.delete('/:group_id/moderators/:user_id', authorize('moderator', 'admin'), group_controller.remove_moderator);
 router.post('/:group_id/leave', authorize('moderator', 'admin'), group_controller.leave_group);
 
+// Suggested Areas
+router.post('/:group_id/suggested-areas', authorize('moderator', 'admin'), group_controller.add_suggested_area);
+router.get('/:group_id/suggested-areas', group_controller.get_suggested_areas);
+router.delete('/:group_id/suggested-areas/:area_id', authorize('moderator', 'admin'), group_controller.delete_suggested_area);
+
 module.exports = router;
