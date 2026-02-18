@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { sendPushNotification } = require('../services/pushNotificationService');
+const { protect, authorize } = require('../middleware/auth_middleware');
+const { logger } = require('../config/logger');
 
-// Test route to send notification
-router.post('/send', async (req, res) => {
+// Test route to send notification (Admin Only)
+router.post('/send', protect, authorize('admin'), async (req, res) => {
     const { tokens, title, body, data, isUrgent } = req.body;
 
     if (!tokens || !Array.isArray(tokens)) {
@@ -12,9 +14,10 @@ router.post('/send', async (req, res) => {
 
     try {
         const result = await sendPushNotification(tokens, title, body, data, isUrgent);
+        logger.info(`Push notification sent successfully locally`);
         res.json({ success: true, result });
     } catch (error) {
-        console.error(error);
+        logger.error(`Failed to send push notification: ${error.message}`);
         res.status(500).json({ error: 'Failed to send notification' });
     }
 });

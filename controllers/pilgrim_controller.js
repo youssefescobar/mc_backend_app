@@ -2,6 +2,7 @@ const Group = require('../models/group_model');
 const User = require('../models/user_model');
 const Pilgrim = require('../models/pilgrim_model');
 const Notification = require('../models/notification_model');
+const { logger } = require('../config/logger');
 
 // Get pilgrim profile
 exports.get_profile = async (req, res) => {
@@ -10,8 +11,6 @@ exports.get_profile = async (req, res) => {
         let pilgrim;
 
         if (req.user.role === 'pilgrim') {
-            // Lazy load to avoid circular dependency if any, though not expected here
-            const Pilgrim = require('../models/pilgrim_model');
             pilgrim = await Pilgrim.findById(req.user.id).select('-password');
         } else {
             pilgrim = await User.findById(req.user.id).select('-password');
@@ -22,7 +21,7 @@ exports.get_profile = async (req, res) => {
         }
         res.json(pilgrim);
     } catch (error) {
-        console.error('Get profile error:', error);
+        logger.error(`Get profile error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -48,11 +47,12 @@ exports.get_my_group = async (req, res) => {
             allow_pilgrim_navigation: group.allow_pilgrim_navigation || false
         });
     } catch (error) {
-        console.error('Get my group error:', error);
+        logger.error(`Get my group error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
 
+// Update pilgrim location
 // Update pilgrim location
 exports.update_location = async (req, res) => {
     try {
@@ -62,36 +62,33 @@ exports.update_location = async (req, res) => {
             return res.status(400).json({ message: 'Latitude and longitude required' });
         }
 
-        let pilgrim = await Pilgrim.findByIdAndUpdate(
-            req.user.id,
-            {
+        const updateData = {
+            current_latitude: latitude,
+            current_longitude: longitude,
+            last_location_update: new Date(),
+            ...(battery_percent !== undefined && { battery_percent })
+        };
+
+        let user;
+        if (req.user.role === 'pilgrim') {
+            user = await Pilgrim.findByIdAndUpdate(req.user.id, updateData, { new: true });
+        } else {
+            // User model might not have battery_percent, so keep it generic if needed or filter
+            // Assuming User schema has location fields (it does based on User model review)
+            user = await User.findByIdAndUpdate(req.user.id, {
                 current_latitude: latitude,
                 current_longitude: longitude,
-                last_location_update: new Date(),
-                ...(battery_percent !== undefined && { battery_percent })
-            },
-            { new: true }
-        );
-
-        if (!pilgrim) {
-            pilgrim = await User.findByIdAndUpdate(
-                req.user.id,
-                {
-                    current_latitude: latitude,
-                    current_longitude: longitude,
-                    last_location_update: new Date()
-                },
-                { new: true }
-            );
+                last_location_update: new Date()
+            }, { new: true });
         }
 
-        if (!pilgrim) {
+        if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        res.json({ message: 'Location updated', last_update: pilgrim.last_location_update });
+        res.json({ message: 'Location updated', last_update: user.last_location_update });
     } catch (error) {
-        console.error('Update location error:', error);
+        logger.error(`Update location error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -101,7 +98,6 @@ exports.trigger_sos = async (req, res) => {
     try {
         let pilgrim;
         if (req.user.role === 'pilgrim') {
-            const Pilgrim = require('../models/pilgrim_model');
             pilgrim = await Pilgrim.findById(req.user.id);
         } else {
             pilgrim = await User.findById(req.user.id);
@@ -146,12 +142,14 @@ exports.trigger_sos = async (req, res) => {
 
         await Notification.insertMany(notifications);
 
+        logger.warn(`SOS Alert triggered by ${pilgrim.full_name} (${pilgrim._id}) in group ${group.group_name}`);
+
         res.json({
             message: 'SOS alert sent to moderators',
             notified_count: moderatorIds.length
         });
     } catch (error) {
-        console.error('SOS trigger error:', error);
+        logger.error(`SOS trigger error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };

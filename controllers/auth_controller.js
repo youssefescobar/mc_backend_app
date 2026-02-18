@@ -3,39 +3,43 @@ const PendingUser = require('../models/pending_user_model');
 const Pilgrim = require('../models/pilgrim_model');
 const ModeratorRequest = require('../models/moderator_request_model');
 const Notification = require('../models/notification_model');
+const Group = require('../models/group_model');
+const PendingPilgrim = require('../models/pending_pilgrim_model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
+const { logger } = require('../config/logger');
 
 // Public Signup: Creates Pilgrim account (no email verification required)
 exports.register_user = async (req, res) => {
     try {
         const { full_name, national_id, phone_number, password, email, medical_history, age, gender, language } = req.body;
 
-        // Check if national_id is already registered
-        const existing_national_id = await Pilgrim.findOne({ national_id });
-        if (existing_national_id) {
-            return res.status(400).json({
-                success: false,
-                message: "Validation Error",
-                errors: { national_id: "National ID is already registered" }
-            });
-        }
+        // Check for existing user with same national_id, phone_number, or email
+        const existing_pilgrim = await Pilgrim.findOne({
+            $or: [
+                { national_id },
+                { phone_number },
+                ...(email && email.trim() ? [{ email: email.trim() }] : [])
+            ]
+        });
 
-        // Check if phone number is already registered
-        const existing_phone = await Pilgrim.findOne({ phone_number });
-        if (existing_phone) {
-            return res.status(400).json({
-                success: false,
-                message: "Validation Error",
-                errors: { phone_number: "Phone number is already registered" }
-            });
-        }
-
-        // Check if email is already registered (if provided)
-        if (email && email.trim()) {
-            const existing_email = await Pilgrim.findOne({ email: email.trim() });
-            if (existing_email) {
+        if (existing_pilgrim) {
+            if (existing_pilgrim.national_id === national_id) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Validation Error",
+                    errors: { national_id: "National ID is already registered" }
+                });
+            }
+            if (existing_pilgrim.phone_number === phone_number) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Validation Error",
+                    errors: { phone_number: "Phone number is already registered" }
+                });
+            }
+            if (email && existing_pilgrim.email === email.trim()) {
                 return res.status(400).json({
                     success: false,
                     message: "Validation Error",
@@ -67,6 +71,8 @@ exports.register_user = async (req, res) => {
             { expiresIn: '30d' }
         );
 
+        logger.info(`Pilgrim registered: ${pilgrim.full_name} (${pilgrim._id})`);
+
         res.status(201).json({
             success: true,
             message: "Pilgrim account created successfully",
@@ -76,7 +82,7 @@ exports.register_user = async (req, res) => {
             full_name: pilgrim.full_name
         });
     } catch (error) {
-        console.error('Registration error:', error);
+        logger.error(`Registration error: ${error.message}`);
         res.status(400).json({ error: error.message });
     }
 };
@@ -110,13 +116,15 @@ exports.verify_email = async (req, res) => {
         // Delete pending user
         await PendingUser.deleteOne({ email });
 
+        logger.info(`Email verified and Moderator created: ${user.email} (${user._id})`);
+
         res.status(201).json({
             success: true,
             message: "Email verified successfully. You can now login.",
             user_id: user._id
         });
     } catch (error) {
-        console.error('Verification error:', error);
+        logger.error(`Verification error: ${error.message}`);
         res.status(400).json({ error: error.message });
     }
 };
@@ -144,15 +152,15 @@ exports.resend_verification = async (req, res) => {
 
         // Send new verification email asynchronously
         sendVerificationEmail(email, verification_code, pending_user.full_name)
-            .then(() => console.log(`Verification email resent to ${email}`))
-            .catch(err => console.error(`Failed to resend verification email to ${email}:`, err));
+            .then(() => logger.info(`Verification email resent to ${email}`))
+            .catch(err => logger.error(`Failed to resend verification email to ${email}: ${err.message}`));
 
         res.status(200).json({
             success: true,
             message: "Verification code resent to email"
         });
     } catch (error) {
-        console.error('Resend verification error:', error);
+        logger.error(`Resend verification error: ${error.message}`);
         res.status(400).json({ error: error.message });
     }
 };
@@ -161,31 +169,25 @@ exports.login_user = async (req, res) => {
     try {
         const { identifier, password } = req.body;
 
-        // Try to find user by email, national_id, or phone_number in Pilgrim collection
-        let user = await Pilgrim.findOne({
-            $or: [
-                { email: identifier },
-                { national_id: identifier },
-                { phone_number: identifier }
-            ]
-        });
-
-        let role = 'pilgrim';
-
-        // If not found in Pilgrim, try User collection (for moderators/admins)
-        if (!user) {
-            user = await User.findOne({
+        // Try to find user in Pilgrim and User collections in parallel
+        const [pilgrim, adminUser] = await Promise.all([
+            Pilgrim.findOne({
+                $or: [
+                    { email: identifier },
+                    { national_id: identifier },
+                    { phone_number: identifier }
+                ]
+            }),
+            User.findOne({
                 $or: [
                     { email: identifier },
                     { phone_number: identifier }
                 ]
-            });
-            if (user) {
-                role = user.role;
-            }
-        } else {
-            role = user.role; // Use role from Pilgrim (could be 'pilgrim' or 'moderator')
-        }
+            })
+        ]);
+
+        let user = pilgrim || adminUser;
+        let role = user ? user.role : 'pilgrim'; // Default if somehow role is missing, but schema has default
 
         if (!user) {
             return res.status(401).json({ message: 'Invalid credentials' });
@@ -209,6 +211,8 @@ exports.login_user = async (req, res) => {
             { expiresIn: '30d' }
         );
 
+        logger.info(`User logged in: ${user._id} (${role})`);
+
         res.json({
             token,
             role: role,
@@ -217,7 +221,7 @@ exports.login_user = async (req, res) => {
             language: user.language || 'en'
         });
     } catch (error) {
-        console.error('Login error:', error);
+        logger.error(`Login error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -234,9 +238,10 @@ exports.logout_user = async (req, res) => {
             await User.findByIdAndUpdate(user_id, { fcm_token: null });
         }
 
+        logger.info(`User logged out: ${user_id}`);
         res.json({ success: true, message: 'Logged out successfully' });
     } catch (error) {
-        console.error('Logout error:', error);
+        logger.error(`Logout error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -251,7 +256,7 @@ exports.get_pilgrim = async (req, res) => {
         const pilgrimObj = pilgrim.toObject();
         res.json(pilgrimObj);
     } catch (error) {
-        console.error('Get pilgrim error:', error);
+        logger.error(`Get pilgrim error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -286,12 +291,14 @@ exports.add_email = async (req, res) => {
             email_verified: false
         });
 
+        logger.info(`Pilgrim added email: ${email} (${pilgrim_id})`);
+
         res.json({
             success: true,
             message: "Email added successfully. Please verify your email."
         });
     } catch (error) {
-        console.error('Add email error:', error);
+        logger.error(`Add email error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -332,15 +339,15 @@ exports.send_email_verification = async (req, res) => {
 
         // Send verification email asynchronously
         sendVerificationEmail(pilgrim.email, verification_code, pilgrim.full_name)
-            .then(() => console.log(`Verification email sent to ${pilgrim.email}`))
-            .catch(err => console.error(`Failed to send verification email:`, err));
+            .then(() => logger.info(`Verification email sent to ${pilgrim.email}`))
+            .catch(err => logger.error(`Failed to send verification email: ${err.message}`));
 
         res.json({
             success: true,
             message: 'Verification code sent to your email'
         });
     } catch (error) {
-        console.error('Send verification error:', error);
+        logger.error(`Send verification error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -378,12 +385,14 @@ exports.verify_pilgrim_email = async (req, res) => {
         // Clean up pending record
         await PendingUser.deleteOne({ email: pilgrim.email });
 
+        logger.info(`Pilgrim email verified: ${pilgrim.email} (${pilgrim_id})`);
+
         res.json({
             success: true,
             message: 'Email verified successfully'
         });
     } catch (error) {
-        console.error('Verify email error:', error);
+        logger.error(`Verify email error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -436,122 +445,14 @@ exports.request_moderator = async (req, res) => {
             pilgrim_id
         });
 
+        logger.info(`Moderator request submitted: ${pilgrim_id}`);
+
         res.json({
             success: true,
             message: 'Moderator request submitted successfully. An admin will review your request.'
         });
     } catch (error) {
-        console.error('Request moderator error:', error);
-        res.status(500).json({ message: 'Server error' });
-    }
-};
-
-// Admin: get pending moderator requests
-exports.get_pending_moderator_requests = async (req, res) => {
-    try {
-        const requests = await ModeratorRequest.find({ status: 'pending' })
-            .populate('pilgrim_id', 'full_name email phone_number')
-            .sort({ requested_at: -1 });
-
-        res.json({
-            success: true,
-            data: requests
-        });
-    } catch (error) {
-        console.error('Get pending moderator requests error:', error);
-        res.status(500).json({ message: 'Server error' });
-    }
-};
-
-// Admin: approve moderator request
-exports.approve_moderator_request = async (req, res) => {
-    try {
-        const { request_id } = req.params;
-
-        const request = await ModeratorRequest.findById(request_id);
-        if (!request) {
-            return res.status(404).json({ message: 'Request not found' });
-        }
-
-        if (request.status !== 'pending') {
-            return res.status(400).json({ message: 'Request already processed' });
-        }
-
-        request.status = 'approved';
-        request.reviewed_at = new Date();
-        request.reviewed_by = req.user.id;
-        await request.save();
-
-        const pilgrim = await Pilgrim.findById(request.pilgrim_id);
-        if (pilgrim) {
-            const existing_user = await User.findById(request.pilgrim_id);
-            if (!existing_user) {
-                await User.create({
-                    _id: pilgrim._id,
-                    full_name: pilgrim.full_name,
-                    email: pilgrim.email,
-                    password: pilgrim.password,
-                    role: 'moderator',
-                    phone_number: pilgrim.phone_number,
-                    active: pilgrim.active
-                });
-                await Pilgrim.findByIdAndDelete(request.pilgrim_id);
-            } else {
-                await User.findByIdAndUpdate(request.pilgrim_id, { role: 'moderator' });
-            }
-        }
-
-        await Notification.create({
-            user_id: request.pilgrim_id,
-            type: 'moderator_request_approved',
-            title: 'Moderator Request Approved',
-            message: 'Your request to become a moderator has been approved. Please log out and log back in to access moderator tools.',
-            data: {
-                request_id: request._id
-            }
-        });
-
-        res.json({ success: true, message: 'Moderator request approved' });
-    } catch (error) {
-        console.error('Approve moderator request error:', error);
-        res.status(500).json({ message: 'Server error' });
-    }
-};
-
-// Admin: reject moderator request
-exports.reject_moderator_request = async (req, res) => {
-    try {
-        const { request_id } = req.params;
-        const { notes } = req.body;
-
-        const request = await ModeratorRequest.findById(request_id);
-        if (!request) {
-            return res.status(404).json({ message: 'Request not found' });
-        }
-
-        if (request.status !== 'pending') {
-            return res.status(400).json({ message: 'Request already processed' });
-        }
-
-        request.status = 'rejected';
-        request.reviewed_at = new Date();
-        request.reviewed_by = req.user.id;
-        if (notes) request.notes = notes;
-        await request.save();
-
-        await Notification.create({
-            user_id: request.pilgrim_id,
-            type: 'moderator_request_rejected',
-            title: 'Moderator Request Rejected',
-            message: 'Your request to become a moderator was not approved at this time.',
-            data: {
-                request_id: request._id
-            }
-        });
-
-        res.json({ success: true, message: 'Moderator request rejected' });
-    } catch (error) {
-        console.error('Reject moderator request error:', error);
+        logger.error(`Request moderator error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -562,15 +463,14 @@ exports.get_profile = async (req, res) => {
         // Use role from JWT token to determine which collection to query
         if (req.user.role === 'pilgrim') {
             // Query Pilgrim collection
-            const pilgrim = await Pilgrim.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified role created_at language');
+            const [pilgrim, latest_request] = await Promise.all([
+                Pilgrim.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified role created_at language'),
+                ModeratorRequest.findOne({ pilgrim_id: req.user.id }).sort({ requested_at: -1 }).select('status')
+            ]);
 
             if (!pilgrim) {
                 return res.status(404).json({ message: "Profile not found" });
             }
-
-            const latest_request = await ModeratorRequest.findOne({ pilgrim_id: req.user.id })
-                .sort({ requested_at: -1 })
-                .select('status');
 
             const moderator_request_status = latest_request?.status || null;
 
@@ -605,7 +505,7 @@ exports.get_profile = async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('Get profile error:', error);
+        logger.error(`Get profile error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -638,6 +538,7 @@ exports.update_profile = async (req, res) => {
                 return res.status(404).json({ message: "Profile not found" });
             }
 
+            logger.info(`Pilgrim profile updated: ${req.user.id}`);
             return res.json({ message: "Profile updated successfully", user: updatedPilgrim });
         } else {
             // Update User profile (moderator/admin)
@@ -660,10 +561,11 @@ exports.update_profile = async (req, res) => {
                 return res.status(404).json({ message: "Profile not found" });
             }
 
+            logger.info(`User profile updated: ${req.user.id}`);
             return res.json({ message: "Profile updated successfully", user: updatedUser });
         }
     } catch (error) {
-        console.error('Update profile error:', error);
+        logger.error(`Update profile error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -682,9 +584,10 @@ exports.update_language = async (req, res) => {
         }
         // Could also update for User/Moderator if they have a language field
 
+        logger.info(`Example: User ${req.user.id} updated language to ${language}`);
         res.json({ message: "Language updated successfully" });
     } catch (error) {
-        console.error('Update language error:', error);
+        logger.error(`Update language error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -709,15 +612,10 @@ exports.update_location = async (req, res) => {
 
         res.json({ message: 'Location updated' });
     } catch (error) {
-        console.error('Update location error:', error);
+        logger.error(`Update location error: ${error.message}`);
         res.status(500).json({ message: 'Server error' });
     }
 };
-
-const Group = require('../models/group_model');
-const PendingPilgrim = require('../models/pending_pilgrim_model');
-
-// ... existing code ...
 
 // Register a new pilgrim via invitation link
 exports.register_invited_pilgrim = async (req, res) => {
@@ -737,8 +635,11 @@ exports.register_invited_pilgrim = async (req, res) => {
 
         // 2. Check if email already registered (as User or Pilgrim)
         // Should ideally update existing record if migrated, but for now assuming new account
-        const existing_user = await User.findOne({ email: pending_pilgrim.email });
-        const existing_pilgrim = await Pilgrim.findOne({ email: pending_pilgrim.email });
+        const [existing_user, existing_pilgrim] = await Promise.all([
+            User.findOne({ email: pending_pilgrim.email }),
+            Pilgrim.findOne({ email: pending_pilgrim.email })
+        ]);
+
         if (existing_user || existing_pilgrim) {
             return res.status(400).json({ message: "Email is already registered. Please login." });
         }
@@ -768,6 +669,8 @@ exports.register_invited_pilgrim = async (req, res) => {
             { expiresIn: '30d' }
         );
 
+        logger.info(`Invited pilgrim registered: ${pilgrim.full_name} (${pilgrim._id})`);
+
         res.status(201).json({
             success: true,
             message: "Pilgrim account registered and added to group",
@@ -778,21 +681,31 @@ exports.register_invited_pilgrim = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Pilgrim invitation registration error:', error);
+        logger.error(`Pilgrim invitation registration error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
 
 // Register a pilgrim (by moderator/admin) - no password required
 exports.register_pilgrim = async (req, res) => {
-    // ... existing code ...
     try {
         const { full_name, national_id, medical_history, email, age, gender, phone_number, password } = req.body;
 
-        // Check if pilgrim already exists with this national ID
-        const existing = await Pilgrim.findOne({ national_id });
-        if (existing) {
-            return res.status(400).json({ message: "Pilgrim with this ID already exists" });
+        // Check if pilgrim already exists with this national ID or phone number
+        const existing_pilgrim = await Pilgrim.findOne({
+            $or: [
+                { national_id },
+                ...(phone_number ? [{ phone_number }] : [])
+            ]
+        });
+
+        if (existing_pilgrim) {
+            if (existing_pilgrim.national_id === national_id) {
+                return res.status(400).json({ message: "Pilgrim with this ID already exists" });
+            }
+            if (phone_number && existing_pilgrim.phone_number === phone_number) {
+                return res.status(400).json({ message: "Phone number already registered" });
+            }
         }
 
         // Hash password if provided
@@ -806,70 +719,50 @@ exports.register_pilgrim = async (req, res) => {
             national_id,
             medical_history,
             email,
+            phone_number,
             age,
             gender,
-            phone_number,
-            password: hashed_password, // Save password
-            created_by: req.user.id
+            password: hashed_password,
+            created_by: req.user.id // Moderator ID
         });
+
+        logger.info(`Pilgrim manually registered by moderator: ${pilgrim._id}`);
 
         res.status(201).json({
+            success: true,
             message: "Pilgrim registered successfully",
-            pilgrim_id: pilgrim._id,
-            national_id: pilgrim.national_id
+            pilgrim
         });
     } catch (error) {
-        res.status(400).json({ error: error.message });
+        logger.error(`Register pilgrim error: ${error.message}`);
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
 
-// Search for pilgrims by national ID or name
+// Search pilgrims (by name or national ID)
 exports.search_pilgrims = async (req, res) => {
     try {
-        const { search, page = 1, limit = 20 } = req.query;
+        const { query } = req.query;
 
-        if (!search || search.trim().length === 0) {
-            return res.status(400).json({ message: "Search query is required" });
+        if (!query) {
+            return res.status(400).json({ message: "Search query required" });
         }
 
-        const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.min(20, Math.max(1, parseInt(limit) || 20)); // Max 20 per page for search
-        const skip = (pageNum - 1) * limitNum;
-
-        const searchQuery = {
+        const pilgrims = await Pilgrim.find({
             $or: [
-                { national_id: { $regex: search, $options: 'i' } },
-                { full_name: { $regex: search, $options: 'i' } }
+                { full_name: { $regex: query, $options: 'i' } },
+                { national_id: { $regex: query, $options: 'i' } }
             ]
-        };
+        }).select('full_name national_id phone_number gender age');
 
-        if (req.user.role === 'moderator') {
-            searchQuery.created_by = req.user.id;
-        }
-
-        const pilgrims = await Pilgrim.find(searchQuery)
-            .select('_id full_name national_id email phone_number medical_history age gender')
-            .skip(skip)
-            .limit(limitNum);
-
-        const total = await Pilgrim.countDocuments(searchQuery);
-
-        res.json({
-            success: true,
-            data: pilgrims,
-            pagination: {
-                page: pageNum,
-                limit: limitNum,
-                total: total,
-                pages: Math.ceil(total / limitNum)
-            }
-        });
+        res.json(pilgrims);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        logger.error(`Search pilgrims error: ${error.message}`);
+        res.status(500).json({ message: 'Server error' });
     }
 };
 
-// Get pilgrim by ID (moderator/admin only)
+// Get pilgrim by ID
 exports.get_pilgrim_by_id = async (req, res) => {
     try {
         const { pilgrim_id } = req.params;

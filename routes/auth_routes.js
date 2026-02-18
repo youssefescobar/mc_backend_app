@@ -9,44 +9,50 @@ const {
     update_profile_schema,
     add_email_schema,
     verify_pilgrim_email_schema,
-    request_moderator_schema
+    request_moderator_schema,
+    update_language_schema,
+    register_pilgrim_schema
 } = require('../middleware/schemas');
 const { authLimiter, searchLimiter } = require('../middleware/rate_limit');
-
-// Public routes with rate limiting
-router.post('/register', authLimiter, validate(register_schema), auth_ctrl.register_user);
-router.post('/register-invited-pilgrim', authLimiter, auth_ctrl.register_invited_pilgrim); // Public, token verifies auth
-router.post('/login', authLimiter, validate(login_schema), auth_ctrl.login_user);
-
 const upload = require('../middleware/upload_middleware');
 
-// Protected routes
-router.use(protect);
+// ==========================================
+// Public Routes
+// ==========================================
+router.post('/register', authLimiter, validate(register_schema), auth_ctrl.register_user);
+router.post('/register-invited-pilgrim', authLimiter, auth_ctrl.register_invited_pilgrim);
+router.post('/login', authLimiter, validate(login_schema), auth_ctrl.login_user);
+
+// ==========================================
+// Protected Routes (All Users)
+// ==========================================
+router.use(protect); // Apply protection to all routes below
+
+// Auth & Profile
 router.post('/logout', auth_ctrl.logout_user);
 router.get('/me', auth_ctrl.get_profile);
 router.put('/update-profile', upload.single('profile_picture'), validate(update_profile_schema), auth_ctrl.update_profile);
-router.put('/update-language', validate(require('../middleware/schemas').update_language_schema), auth_ctrl.update_language);
+router.put('/update-language', validate(update_language_schema), auth_ctrl.update_language);
 router.put('/location', auth_ctrl.update_location);
-// FCM Token Update
 router.put('/fcm-token', auth_ctrl.update_fcm_token);
 
-// Email management for pilgrims
+// Email Verification
 router.post('/add-email', validate(add_email_schema), auth_ctrl.add_email);
 router.post('/send-email-verification', auth_ctrl.send_email_verification);
-router.post('/resend-verification', auth_ctrl.send_email_verification); // Alias used by VerifyEmailScreen
+router.post('/resend-verification', auth_ctrl.send_email_verification);
 router.post('/verify-email', validate(verify_pilgrim_email_schema), auth_ctrl.verify_pilgrim_email);
 
-// Moderator request
+// Moderator Request
 router.post('/request-moderator', validate(request_moderator_schema), auth_ctrl.request_moderator);
 
-// Admin: review moderator requests
-router.get('/moderator-requests', authorize('admin'), auth_ctrl.get_pending_moderator_requests);
-router.put('/moderator-requests/:request_id/approve', authorize('admin'), auth_ctrl.approve_moderator_request);
-router.put('/moderator-requests/:request_id/reject', authorize('admin'), auth_ctrl.reject_moderator_request);
 
-// Moderator/Admin routes
-router.post('/register-pilgrim', authorize('moderator', 'admin'), validate(require('../middleware/schemas').register_pilgrim_schema), auth_ctrl.register_pilgrim);
-router.get('/search-pilgrims', authorize('moderator', 'admin'), searchLimiter, auth_ctrl.search_pilgrims);
-router.get('/pilgrims/:pilgrim_id', authorize('moderator', 'admin'), auth_ctrl.get_pilgrim_by_id);
+// ==========================================
+// Moderator & Admin Routes
+// ==========================================
+const modAuth = authorize('moderator', 'admin');
+
+router.post('/register-pilgrim', modAuth, validate(register_pilgrim_schema), auth_ctrl.register_pilgrim);
+router.get('/search-pilgrims', modAuth, searchLimiter, auth_ctrl.search_pilgrims);
+router.get('/pilgrims/:pilgrim_id', modAuth, auth_ctrl.get_pilgrim_by_id);
 
 module.exports = router;

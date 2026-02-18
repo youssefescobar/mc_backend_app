@@ -1,5 +1,6 @@
 const CommunicationSession = require('../models/communication_session_model');
 const Group = require('../models/group_model');
+const { logger } = require('../config/logger');
 
 // Start a new communication session
 exports.start_session = async (req, res) => {
@@ -11,7 +12,17 @@ exports.start_session = async (req, res) => {
         }
 
         // Verify group membership
-        // ... (assume protected middleware checks role, but we should check group membership)
+        const group = await Group.findOne({
+            _id: group_id,
+            $or: [
+                { pilgrim_ids: req.user.id },
+                { moderator_ids: req.user.id }
+            ]
+        });
+
+        if (!group) {
+            return res.status(403).json({ message: "Not authorized to start session in this group" });
+        }
 
         const initiator_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
 
@@ -26,6 +37,8 @@ exports.start_session = async (req, res) => {
             }]
         });
 
+        logger.info(`Communication session started: ${session._id} by ${req.user.id}`);
+
         res.status(201).json({
             success: true,
             message: "Session started",
@@ -34,6 +47,7 @@ exports.start_session = async (req, res) => {
         });
 
     } catch (error) {
+        logger.error(`Start session error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -43,25 +57,24 @@ exports.join_session = async (req, res) => {
     try {
         const { session_id } = req.body;
 
-        const session = await CommunicationSession.findById(session_id);
-        if (!session || session.status !== 'active') {
-            return res.status(404).json({ message: "Active session not found" });
-        }
-
         const user_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
 
-        // Check if already joined
-        const isJoined = session.participants.some(p => p.user_id.toString() === req.user.id);
-        if (isJoined) {
-            return res.status(200).json({ message: "Already in session", session });
+        const session = await CommunicationSession.findOneAndUpdate(
+            { _id: session_id, status: 'active' },
+            {
+                $addToSet: {
+                    participants: {
+                        user_id: req.user.id,
+                        user_model
+                    }
+                }
+            },
+            { new: true }
+        );
+
+        if (!session) {
+            return res.status(404).json({ message: "Active session not found" });
         }
-
-        session.participants.push({
-            user_id: req.user.id,
-            user_model
-        });
-
-        await session.save();
 
         res.json({
             success: true,
@@ -70,6 +83,7 @@ exports.join_session = async (req, res) => {
         });
 
     } catch (error) {
+        logger.error(`Join session error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -85,6 +99,7 @@ exports.end_session = async (req, res) => {
         }
 
         // Only initiator or moderator can end (simplified check)
+        // Ideally checking if user is a moderator of the group would be better security
         if (session.initiator_id.toString() !== req.user.id && req.user.role === 'pilgrim') {
             return res.status(403).json({ message: "Not authorized to end this session" });
         }
@@ -93,9 +108,12 @@ exports.end_session = async (req, res) => {
         session.ended_at = Date.now();
         await session.save();
 
+        logger.info(`Session ended: ${session_id} by ${req.user.id}`);
+
         res.json({ message: "Session ended" });
 
     } catch (error) {
+        logger.error(`End session error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -115,6 +133,7 @@ exports.get_active_sessions = async (req, res) => {
             data: sessions
         });
     } catch (error) {
+        logger.error(`Get active sessions error: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };

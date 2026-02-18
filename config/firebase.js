@@ -1,6 +1,7 @@
 const admin = require('firebase-admin');
 const path = require('path');
 const fs = require('fs');
+const { logger } = require('./logger');
 
 // Path to service account key
 const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
@@ -9,13 +10,16 @@ const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
 if (fs.existsSync(serviceAccountPath)) {
     const serviceAccount = require(serviceAccountPath);
 
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
-
-    console.log('Firebase Admin Initialized');
+    try {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        logger.info('Firebase Admin Initialized successfully');
+    } catch (error) {
+        logger.error(`Error initializing Firebase Admin: ${error.message}`);
+    }
 } else {
-    console.warn('WARNING: serviceAccountKey.json not found in config/. Notifications will not work.');
+    logger.warn('WARNING: serviceAccountKey.json not found in config/. Notifications will not work.');
 }
 
 module.exports = admin;

@@ -6,6 +6,7 @@ const Group = require('../models/group_model');
 const Notification = require('../models/notification_model');
 const PendingPilgrim = require('../models/pending_pilgrim_model');
 const { sendGroupInvitationEmail } = require('../config/email_service');
+const { logger } = require('../config/logger');
 
 // Send invitation to another moderator
 const send_invitation = async (req, res) => {
@@ -13,8 +14,6 @@ const send_invitation = async (req, res) => {
         const { group_id } = req.params;
         const { email } = req.body;
         const inviter_id = req.user.id;
-
-
 
         // Get group and verify inviter is a moderator
         const group = await Group.findById(group_id);
@@ -27,9 +26,11 @@ const send_invitation = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Only group moderators can send invitations' });
         }
 
-        // Check if user exists (as moderator/admin or as pilgrim)
-        const invitee = await User.findOne({ email: email.toLowerCase() });
-        const invitee_pilgrim = !invitee ? await Pilgrim.findOne({ email: email.toLowerCase() }) : null;
+        // Check if user exists (as moderator/admin or as pilgrim) in parallel
+        const [invitee, invitee_pilgrim] = await Promise.all([
+            User.findOne({ email: email.toLowerCase() }),
+            Pilgrim.findOne({ email: email.toLowerCase() })
+        ]);
 
         // Check if already a moderator
         if (invitee && group.moderator_ids.some(id => id.toString() === invitee._id.toString())) {
@@ -62,7 +63,13 @@ const send_invitation = async (req, res) => {
         });
 
         // Get inviter info for email/notification
-        const inviter = await User.findById(inviter_id);
+        // Use role to skip double query
+        let inviter;
+        if (req.user.role === 'pilgrim') { // Unlikely but possible if logic changes
+            inviter = await Pilgrim.findById(inviter_id);
+        } else {
+            inviter = await User.findById(inviter_id);
+        }
 
         // Create notification for invitee if registered (moderator or pilgrim)
         const notify_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
@@ -85,13 +92,15 @@ const send_invitation = async (req, res) => {
         const frontend_url = process.env.FRONTEND_URL || 'http://localhost:3000';
         await sendGroupInvitationEmail(email, inviter.full_name, group.group_name, frontend_url, inviter.profile_picture);
 
+        logger.info(`Invitation sent: ${invitation._id} by ${inviter.full_name}`);
+
         res.status(201).json({
             success: true,
             message: 'Invitation sent successfully',
             invitation_id: invitation._id
         });
     } catch (error) {
-        console.error('Send invitation error:', error);
+        logger.error(`Send invitation error: ${error.message}`);
         res.status(500).json({ success: false, message: 'Failed to send invitation' });
     }
 };
@@ -101,10 +110,15 @@ const accept_invitation = async (req, res) => {
     try {
         const { id } = req.params;
         const user_id = req.user.id;
-        // Look up in both User and Pilgrim collections
-        const user = await User.findById(user_id).select('email');
-        const pilgrim_account = !user ? await Pilgrim.findById(user_id).select('email') : null;
-        const account = user || pilgrim_account;
+
+        // Optimize: Use role to determine which collection to query
+        let account;
+        if (req.user.role === 'pilgrim') {
+            account = await Pilgrim.findById(user_id).select('email');
+        } else {
+            account = await User.findById(user_id).select('email');
+        }
+
         const user_email = account?.email ? account.email.toLowerCase() : null;
 
         const invitation = await Invitation.findById(id).populate('group_id');
@@ -122,9 +136,8 @@ const accept_invitation = async (req, res) => {
             return res.status(400).json({ success: false, message: `Invitation is already ${invitation.status}` });
         }
 
-        // Determine if the user is a moderator or pilgrim and add accordingly
-        const accepting_user = await User.findById(user_id);
-        if (accepting_user) {
+        // Determine if the user is a moderator or pilgrim and add accordingly based on role
+        if (req.user.role !== 'pilgrim') {
             // User is a moderator/admin — add to moderator_ids
             await Group.findByIdAndUpdate(invitation.group_id._id, {
                 $addToSet: { moderator_ids: user_id }
@@ -151,7 +164,7 @@ const accept_invitation = async (req, res) => {
             user_id: invitation.inviter_id,
             type: 'invitation_accepted',
             title: 'Invitation Accepted',
-            message: `${req.user.full_name} accepted your invitation to join "${invitation.group_id.group_name}"`,
+            message: `${req.user.full_name || account.full_name} accepted your invitation to join "${invitation.group_id.group_name}"`,
             data: {
                 invitation_id: invitation._id,
                 group_id: invitation.group_id._id,
@@ -159,14 +172,16 @@ const accept_invitation = async (req, res) => {
             }
         });
 
-        const role_label = accepting_user ? 'moderator' : 'member';
+        logger.info(`Invitation accepted: ${invitation._id} by ${user_id}`);
+
+        const role_label = req.user.role !== 'pilgrim' ? 'moderator' : 'member';
         res.json({
             success: true,
             message: `Invitation accepted! You are now a ${role_label} of this group.`,
             group_id: invitation.group_id._id
         });
     } catch (error) {
-        console.error('Accept invitation error:', error);
+        logger.error(`Accept invitation error: ${error.message}`);
         res.status(500).json({ success: false, message: 'Failed to accept invitation' });
     }
 };
@@ -176,10 +191,14 @@ const decline_invitation = async (req, res) => {
     try {
         const { id } = req.params;
         const user_id = req.user.id;
-        // Look up in both User and Pilgrim collections
-        const user = await User.findById(user_id).select('email');
-        const pilgrim_account = !user ? await Pilgrim.findById(user_id).select('email') : null;
-        const account = user || pilgrim_account;
+
+        let account;
+        if (req.user.role === 'pilgrim') {
+            account = await Pilgrim.findById(user_id).select('email');
+        } else {
+            account = await User.findById(user_id).select('email');
+        }
+
         const user_email = account?.email ? account.email.toLowerCase() : null;
 
         const invitation = await Invitation.findById(id).populate('group_id');
@@ -212,7 +231,7 @@ const decline_invitation = async (req, res) => {
             user_id: invitation.inviter_id,
             type: 'invitation_declined',
             title: 'Invitation Declined',
-            message: `${req.user.full_name} declined your invitation to join "${invitation.group_id.group_name}"`,
+            message: `${req.user.full_name || account.full_name} declined your invitation to join "${invitation.group_id.group_name}"`,
             data: {
                 invitation_id: invitation._id,
                 group_id: invitation.group_id._id,
@@ -220,12 +239,14 @@ const decline_invitation = async (req, res) => {
             }
         });
 
+        logger.info(`Invitation declined: ${invitation._id} by ${user_id}`);
+
         res.json({
             success: true,
             message: 'Invitation declined'
         });
     } catch (error) {
-        console.error('Decline invitation error:', error);
+        logger.error(`Decline invitation error: ${error.message}`);
         res.status(500).json({ success: false, message: 'Failed to decline invitation' });
     }
 };
@@ -234,10 +255,14 @@ const decline_invitation = async (req, res) => {
 const get_my_invitations = async (req, res) => {
     try {
         const user_id = req.user.id;
-        // Look up in both User and Pilgrim collections
-        const user = await User.findById(user_id).select('email');
-        const pilgrim_account = !user ? await Pilgrim.findById(user_id).select('email') : null;
-        const account = user || pilgrim_account;
+
+        let account;
+        if (req.user.role === 'pilgrim') {
+            account = await Pilgrim.findById(user_id).select('email');
+        } else {
+            account = await User.findById(user_id).select('email');
+        }
+
         const user_email = account?.email ? account.email.toLowerCase() : null;
 
         const orFilters = [{ invitee_id: user_id }];
@@ -258,7 +283,7 @@ const get_my_invitations = async (req, res) => {
             invitations
         });
     } catch (error) {
-        console.error('Get invitations error:', error);
+        logger.error(`Get invitations error: ${error.message}`);
         res.status(500).json({ success: false, message: 'Failed to get invitations' });
     }
 };

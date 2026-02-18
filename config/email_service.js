@@ -1,24 +1,22 @@
 const nodemailer = require('nodemailer');
-const path = require('path');
+const { logger } = require('./logger');
 
 // Create transporter with Gmail SMTP
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS // App Password (not regular password)
+        pass: process.env.EMAIL_PASS
     }
 });
 
 // Verify SMTP connection on startup
 transporter.verify()
     .then(() => {
-        console.log('✅ Gmail SMTP connection verified successfully');
-        console.log('   Sending from:', process.env.EMAIL_USER);
+        logger.info(`✅ Gmail SMTP connection verified: ${process.env.EMAIL_USER}`);
     })
     .catch((error) => {
-        console.error('❌ Gmail SMTP connection FAILED!');
-        console.error('   Error:', error.message);
+        logger.error(`❌ Gmail SMTP connection FAILED: ${error.message}`);
     });
 
 // Generate 6-digit verification code
@@ -35,10 +33,6 @@ const sendVerificationEmail = async (to, code, fullName) => {
         html: `
             <!DOCTYPE html>
             <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            </head>
             <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4;">
                 <table role="presentation" style="width: 100%; border-collapse: collapse;">
                     <tr>
@@ -47,7 +41,6 @@ const sendVerificationEmail = async (to, code, fullName) => {
                                 <!-- Header -->
                                 <tr>
                                     <td style="padding: 40px 40px 20px; text-align: center; border-radius: 12px 12px 0 0;">
-                                        <img src="cid:logo" alt="Munawwara Care" style="width: 100px; height: auto; margin-bottom: 20px;">
                                         <h1 style="margin: 0; color: #1e40af; font-size: 28px; font-weight: 700;">Munawwara Care</h1>
                                         <p style="margin: 10px 0 0; color: #4b5563; font-size: 14px; opacity: 0.9;">Hajj & Umrah Management System</p>
                                     </td>
@@ -87,28 +80,21 @@ const sendVerificationEmail = async (to, code, fullName) => {
                 </table>
             </body>
             </html>
-        `,
-        attachments: [{
-            filename: 'logo.jpeg',
-            path: path.join(__dirname, '../uploads/logo.jpeg'),
-            cid: 'logo'
-        }]
+        `
     };
 
     try {
         const result = await transporter.sendMail(mailOptions);
-        console.log('✅ Email sent successfully to:', to);
-        console.log('   Message ID:', result.messageId);
+        logger.info(`Verification email sent to: ${to} (Message ID: ${result.messageId})`);
         return result;
     } catch (error) {
-        console.error('❌ Email sending failed to:', to);
-        console.error('   Error:', error.message);
+        logger.error(`Failed to send verification email to ${to}: ${error.message}`);
         throw error;
     }
 };
 
 // Send group invitation email
-const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl, inviterProfilePic) => {
+const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl) => {
     const mailOptions = {
         from: `"Munawwara Care" <${process.env.EMAIL_USER}>`,
         to,
@@ -116,10 +102,6 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
         html: `
             <!DOCTYPE html>
             <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            </head>
             <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4;">
                 <table role="presentation" style="width: 100%; border-collapse: collapse;">
                     <tr>
@@ -128,7 +110,6 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
                                 <!-- Header -->
                                 <tr>
                                     <td style="padding: 40px 40px 20px; text-align: center; border-radius: 12px 12px 0 0;">
-                                        <img src="cid:logo" alt="Munawwara Care" style="width: 100px; height: auto; margin-bottom: 20px;">
                                         <h1 style="margin: 0; color: #1e40af; font-size: 28px; font-weight: 700;">Munawwara Care</h1>
                                         <p style="margin: 10px 0 0; color: #4b5563; font-size: 14px; opacity: 0.9;">Hajj & Umrah Management System</p>
                                     </td>
@@ -143,12 +124,6 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
                                         <!-- Group Name Box -->
                                         <div style="text-align: center; margin: 30px 0;">
                                             <div style="display: inline-block; text-align: center;">
-                                                <!-- Inviter PFP -->
-                                                ${inviterProfilePic ?
-                `<img src="http://192.168.1.13:5000/uploads/${inviterProfilePic}" alt="${inviterName}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 3px solid #3b82f6; margin-bottom: 15px;">`
-                :
-                `<div style="width: 80px; height: 80px; border-radius: 50%; background-color: #3b82f6; color: white; line-height: 80px; text-align: center; font-size: 32px; font-weight: bold; margin: 0 auto 15px;">${inviterName.charAt(0)}</div>`
-            }
                                                 <div style="background-color: #eff6ff; border: 2px solid #3b82f6; border-radius: 8px; padding: 15px 30px; margin-top: 10px;">
                                                     <span style="font-size: 20px; font-weight: 600; color: #1e40af;">${groupName}</span>
                                                 </div>
@@ -182,21 +157,15 @@ const sendGroupInvitationEmail = async (to, inviterName, groupName, frontendUrl,
                 </table>
             </body>
             </html>
-        `,
-        attachments: [{
-            filename: 'logo.jpeg',
-            path: path.join(__dirname, '../uploads/logo.jpeg'),
-            cid: 'logo'
-        }]
+        `
     };
 
     try {
         const result = await transporter.sendMail(mailOptions);
-        console.log('✅ Invitation email sent to:', to);
+        logger.info(`Group Invitation email sent to: ${to}`);
         return result;
     } catch (error) {
-        console.error('❌ Invitation email failed to:', to);
-        console.error('   Error:', error.message);
+        logger.error(`Failed to send group invitation email to ${to}: ${error.message}`);
         throw error;
     }
 };
@@ -209,7 +178,6 @@ const sendPilgrimInvitationEmail = async (to, inviterName, groupName, deepLink) 
         html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
                 <div style="text-align: center; margin-bottom: 30px;">
-                    <img src="cid:logo" alt="Munawwara Care" style="width: 100px; height: auto; margin-bottom: 20px;">
                     <h1 style="color: #2563eb; margin: 0;">Munawwara Care</h1>
                     <p style="color: #666; margin-top: 5px;">Hajj & Umrah Companion</p>
                 </div>
@@ -240,19 +208,14 @@ const sendPilgrimInvitationEmail = async (to, inviterName, groupName, deepLink) 
                     <p>&copy; ${new Date().getFullYear()} Munawwara Care. All rights reserved.</p>
                 </div>
             </div>
-        `,
-        attachments: [{
-            filename: 'logo.jpeg',
-            path: path.join(__dirname, '../uploads/logo.jpeg'),
-            cid: 'logo'
-        }]
+        `
     };
 
     try {
         await transporter.sendMail(mailOptions);
-        console.log(`Pilgrim invitation email sent to ${to}`);
+        logger.info(`Pilgrim invitation email sent to ${to}`);
     } catch (error) {
-        console.error('Error sending pilgrim invitation email:', error);
+        logger.error(`Error sending pilgrim invitation email to ${to}: ${error.message}`);
         throw error;
     }
 };

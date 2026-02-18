@@ -1,8 +1,9 @@
 const Message = require('../models/message_model');
 const Group = require('../models/group_model');
 const Pilgrim = require('../models/pilgrim_model');
-const User = require('../models/user_model');
+// User model not used directly here
 const { sendPushNotification } = require('../services/pushNotificationService');
+const { logger } = require('../config/logger');
 
 // Send a message (Text, Voice, Image, or TTS)
 exports.send_message = async (req, res) => {
@@ -39,10 +40,6 @@ exports.send_message = async (req, res) => {
             sender_id: req.user.id,
             sender_model,
             type: type || 'text',
-            content,
-            media_url,
-            is_urgent: is_urgent || false,
-            is_urgent: is_urgent || false,
             content,
             media_url,
             is_urgent: is_urgent || false,
@@ -85,13 +82,15 @@ exports.send_message = async (req, res) => {
             }
         }
 
+        logger.info(`Broadcast message sent to group ${group_id} by ${req.user.id}`);
+
         res.status(201).json({
             success: true,
             data: message
         });
 
     } catch (error) {
-        console.error('Send message error:', error);
+        logger.error(`Send message error: ${error.message}`);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -146,7 +145,6 @@ exports.send_individual_message = async (req, res) => {
             content,
             media_url,
             is_urgent: is_urgent || false,
-            is_urgent: is_urgent || false,
             original_text: type === 'tts' ? original_text : undefined,
             duration: req.body.duration ? parseInt(req.body.duration) : 0
         });
@@ -180,12 +178,14 @@ exports.send_individual_message = async (req, res) => {
             }, is_urgent);
         }
 
+        logger.info(`Individual message sent to ${recipient_id} by ${req.user.id}`);
+
         res.status(201).json({
             success: true,
             data: message
         });
     } catch (error) {
-        console.error('Send individual message error:', error);
+        logger.error(`Send individual message error: ${error.message}`);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -214,7 +214,7 @@ exports.get_group_messages = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Get messages error:', error);
+        logger.error(`Get messages error: ${error.message}`);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -251,7 +251,7 @@ exports.delete_message = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Delete message error:', error);
+        logger.error(`Delete message error: ${error.message}`);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -270,7 +270,7 @@ exports.get_unread_count = async (req, res) => {
 
         res.json({ success: true, unread_count: count });
     } catch (error) {
-        console.error('Get unread count error:', error);
+        logger.error(`Get unread count error: ${error.message}`);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -292,7 +292,7 @@ exports.mark_read = async (req, res) => {
 
         res.json({ success: true });
     } catch (error) {
-        console.error('Mark read error:', error);
+        logger.error(`Mark read error: ${error.message}`);
         res.status(500).json({ message: "Server error" });
     }
 };

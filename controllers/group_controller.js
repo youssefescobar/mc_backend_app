@@ -2,8 +2,9 @@ const Group = require('../models/group_model');
 const User = require('../models/user_model');
 const Pilgrim = require('../models/pilgrim_model');
 const SuggestedArea = require('../models/suggested_area_model');
+const Notification = require('../models/notification_model');
 const QRCode = require('qrcode');
-// HardwareBand removed
+const { logger } = require('../config/logger');
 
 // Get a single group by ID (moderator/admin only)
 exports.get_single_group = async (req, res) => {
@@ -28,19 +29,15 @@ exports.get_single_group = async (req, res) => {
 
         // Enrich pilgrims with their details (Location now directly on Pilgrim)
         const pilgrim_ids = group.pilgrim_ids || [];
-        const pilgrims_with_details = await Promise.all(pilgrim_ids.map(async (pilgrim_id) => {
-            const pilgrim = await Pilgrim.findById(pilgrim_id)
-                .select('full_name national_id email phone_number medical_history age gender current_latitude current_longitude last_location_update battery_percent')
-                .lean();
 
-            if (!pilgrim) return null;
+        // Optimize: Fetch all pilgrims in one query
+        const pilgrims = await Pilgrim.find({ _id: { $in: pilgrim_ids } })
+            .select('full_name national_id email phone_number medical_history age gender current_latitude current_longitude last_location_update battery_percent')
+            .lean();
 
+        const pilgrims_with_details = pilgrims.map(pilgrim => {
             return {
                 ...pilgrim,
-                // Map new fields to maintain frontend compatibility if needed, or just send as is.
-                // For now, let's keep the structure simple or adapt to what frontend expects if we want minimal frontend changes.
-                // However, moving forward, the frontend should look at 'current_latitude' etc directly.
-                // Let's assume we update frontend to look for these fields.
                 location: (pilgrim.current_latitude && pilgrim.current_longitude) ? {
                     lat: pilgrim.current_latitude,
                     lng: pilgrim.current_longitude
@@ -48,19 +45,18 @@ exports.get_single_group = async (req, res) => {
                 last_updated: pilgrim.last_location_update,
                 battery_percent: pilgrim.battery_percent
             };
-        }));
+        });
 
-        group.pilgrims = pilgrims_with_details.filter(Boolean); // Add enriched pilgrims to group object
+        group.pilgrims = pilgrims_with_details;
         delete group.pilgrim_ids; // Remove raw pilgrim_ids array
 
         // Remove __v from top-level group object
         delete group.__v;
-        // The populated moderator_ids already exclude __v due to 'lean()' and selected fields.
 
         res.status(200).json(group);
 
     } catch (error) {
-        console.error("Error in get_single_group:", error);
+        logger.error(`Error in get_single_group: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -138,7 +134,7 @@ exports.generate_group_qr = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Error generating QR code:", error);
+        logger.error(`Error generating QR code: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -206,50 +202,63 @@ exports.get_my_groups = async (req, res) => {
         const groups = await Group.find(query)
             .populate('moderator_ids', 'full_name email')
             .skip(skip)
-            .limit(limitNum);
+            .limit(limitNum)
+            .lean(); // Use lean for better performance
 
         const total = await Group.countDocuments(query);
 
-        const enriched_data = await Promise.all(groups.map(async (group) => {
-            if (!group) return null;
+        // Collect all unique pilgrim IDs across all fetched groups
+        const allPilgrimIds = new Set();
+        groups.forEach(group => {
+            if (group.pilgrim_ids && Array.isArray(group.pilgrim_ids)) {
+                group.pilgrim_ids.forEach(id => allPilgrimIds.add(id.toString()));
+            }
+        });
 
-            const groupObj = group.toObject ? group.toObject() : group;
+        // Fetch all pilgrims in one query if there are any
+        let pilgrimsMap = {};
+        if (allPilgrimIds.size > 0) {
+            const pilgrims = await Pilgrim.find({ _id: { $in: Array.from(allPilgrimIds) } })
+                .select('full_name email phone_number national_id medical_history age gender current_latitude current_longitude last_location_update battery_percent')
+                .lean();
+
+            pilgrims.forEach(p => {
+                pilgrimsMap[p._id.toString()] = p;
+            });
+        }
+
+        // Enrich groups with pilgrim data from map
+        const enriched_data = groups.map(group => {
             const pilgrim_ids = group.pilgrim_ids || [];
 
-            const pilgrims_with_locations = (await Promise.all(pilgrim_ids.map(async (pilgrim_id) => {
-                if (!pilgrim_id) return null;
-
-                const pilgrim = await Pilgrim.findById(pilgrim_id)
-                    .select('full_name email phone_number national_id medical_history age gender current_latitude current_longitude last_location_update battery_percent');
-
+            const pilgrims_with_locations = pilgrim_ids.map(id => {
+                const pilgrim = pilgrimsMap[id.toString()];
                 if (!pilgrim) return null;
 
-                const pilgrimObj = pilgrim.toObject ? pilgrim.toObject() : pilgrim;
-
                 return {
-                    ...pilgrimObj,
-                    location: (pilgrimObj.current_latitude && pilgrimObj.current_longitude) ? {
-                        lat: pilgrimObj.current_latitude,
-                        lng: pilgrimObj.current_longitude
+                    ...pilgrim,
+                    location: (pilgrim.current_latitude && pilgrim.current_longitude) ? {
+                        lat: pilgrim.current_latitude,
+                        lng: pilgrim.current_longitude
                     } : null,
-                    last_updated: pilgrimObj.last_location_update,
-                    battery_percent: pilgrimObj.battery_percent
+                    last_updated: pilgrim.last_location_update,
+                    battery_percent: pilgrim.battery_percent
                 };
-            }))).filter(Boolean); // Remove nulls
+            }).filter(Boolean);
 
             // Rename pilgrim_ids to pilgrims to match docs
-            delete groupObj.pilgrim_ids;
-            groupObj.pilgrims = pilgrims_with_locations;
+            delete group.pilgrim_ids;
+            group.pilgrims = pilgrims_with_locations;
 
             // Polyfill created_at if missing
-            groupObj.created_at = groupObj.createdAt || groupObj.created_at || (groupObj._id && groupObj._id.getTimestamp ? groupObj._id.getTimestamp() : new Date(parseInt(groupObj._id.toString().substring(0, 8), 16) * 1000));
+            group.created_at = group.createdAt || group.created_at || (group._id && group._id.getTimestamp ? group._id.getTimestamp() : new Date());
 
-            return groupObj;
-        }));
+            return group;
+        });
 
         res.json({
             success: true,
-            data: enriched_data.filter(Boolean),
+            data: enriched_data,
             pagination: {
                 page: pageNum,
                 limit: limitNum,
@@ -258,12 +267,10 @@ exports.get_my_groups = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error("Error in get_my_groups:", error);
+        logger.error(`Error in get_my_groups: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
-
-// Hardware management functions removed (assign_band, unassign_band, get_available_bands)
 
 // 4. Send Message to Group (for later Voice processing)
 exports.send_group_alert = async (req, res) => {
@@ -357,7 +364,7 @@ exports.add_pilgrim_to_group = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[Add Pilgrim Error]', error);
+        logger.error(`[Add Pilgrim Error]: ${error.message}`);
         if (error.code === 11000) {
             return res.status(400).json({ message: "Pilgrim with this National ID or Phone Number already exists." });
         }
@@ -444,7 +451,6 @@ exports.remove_moderator = async (req, res) => {
         });
 
         // Notify the removed moderator
-        const Notification = require('../models/notification_model'); // Lazy load to avoid circular deps if any
         await Notification.create({
             user_id: user_id,
             type: 'moderator_removed',
@@ -458,7 +464,7 @@ exports.remove_moderator = async (req, res) => {
 
         res.json({ message: "Moderator removed successfully" });
     } catch (error) {
-        console.error("Error in remove_moderator:", error);
+        logger.error(`Error in remove_moderator: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -487,7 +493,6 @@ exports.leave_group = async (req, res) => {
         });
 
         // Notify the creator
-        const Notification = require('../models/notification_model');
         await Notification.create({
             user_id: group.created_by,
             type: 'moderator_left',
@@ -501,7 +506,7 @@ exports.leave_group = async (req, res) => {
 
         res.json({ message: "You have left the group successfully" });
     } catch (error) {
-        console.error("Error in leave_group:", error);
+        logger.error(`Error in leave_group: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -553,7 +558,7 @@ exports.update_group_details = async (req, res) => {
         res.status(200).json({ message: "Group updated successfully", group: updated_group });
 
     } catch (error) {
-        console.error("Error in update_group_details:", error);
+        logger.error(`Error in update_group_details: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -591,7 +596,7 @@ exports.add_suggested_area = async (req, res) => {
 
         res.status(201).json({ success: true, area });
     } catch (error) {
-        console.error("Error in add_suggested_area:", error);
+        logger.error(`Error in add_suggested_area: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -613,7 +618,7 @@ exports.get_suggested_areas = async (req, res) => {
 
         res.json({ success: true, areas });
     } catch (error) {
-        console.error("Error in get_suggested_areas:", error);
+        logger.error(`Error in get_suggested_areas: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
@@ -645,7 +650,7 @@ exports.delete_suggested_area = async (req, res) => {
 
         res.json({ success: true, message: "Suggested area removed" });
     } catch (error) {
-        console.error("Error in delete_suggested_area:", error);
+        logger.error(`Error in delete_suggested_area: ${error.message}`);
         res.status(500).json({ error: error.message });
     }
 };
