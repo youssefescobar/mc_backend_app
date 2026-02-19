@@ -32,7 +32,7 @@ exports.get_single_group = async (req, res) => {
 
         // Optimize: Fetch all pilgrims in one query
         const pilgrims = await Pilgrim.find({ _id: { $in: pilgrim_ids } })
-            .select('full_name national_id email phone_number medical_history age gender current_latitude current_longitude last_location_update battery_percent')
+            .select('full_name national_id email phone_number medical_history age gender current_latitude current_longitude last_location_update battery_percent active last_active_at')
             .lean();
 
         const pilgrims_with_details = pilgrims.map(pilgrim => {
@@ -43,7 +43,9 @@ exports.get_single_group = async (req, res) => {
                     lng: pilgrim.current_longitude
                 } : null,
                 last_updated: pilgrim.last_location_update,
-                battery_percent: pilgrim.battery_percent
+                battery_percent: pilgrim.battery_percent,
+                active: pilgrim.active,
+                last_active_at: pilgrim.last_active_at
             };
         });
 
@@ -219,7 +221,7 @@ exports.get_my_groups = async (req, res) => {
         let pilgrimsMap = {};
         if (allPilgrimIds.size > 0) {
             const pilgrims = await Pilgrim.find({ _id: { $in: Array.from(allPilgrimIds) } })
-                .select('full_name email phone_number national_id medical_history age gender current_latitude current_longitude last_location_update battery_percent')
+                .select('full_name email phone_number national_id medical_history age gender current_latitude current_longitude last_location_update battery_percent active last_active_at')
                 .lean();
 
             pilgrims.forEach(p => {
@@ -242,7 +244,9 @@ exports.get_my_groups = async (req, res) => {
                         lng: pilgrim.current_longitude
                     } : null,
                     last_updated: pilgrim.last_location_update,
-                    battery_percent: pilgrim.battery_percent
+                    battery_percent: pilgrim.battery_percent,
+                    active: pilgrim.active,
+                    last_active_at: pilgrim.last_active_at
                 };
             }).filter(Boolean);
 

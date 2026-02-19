@@ -90,7 +90,7 @@ const send_invitation = async (req, res) => {
 
         // Send invitation email
         const frontend_url = process.env.FRONTEND_URL || 'http://localhost:3000';
-        await sendGroupInvitationEmail(email, inviter.full_name, group.group_name, frontend_url, inviter.profile_picture);
+        await sendGroupInvitationEmail(email, inviter.full_name, group.group_name, frontend_url);
 
         logger.info(`Invitation sent: ${invitation._id} by ${inviter.full_name}`);
 

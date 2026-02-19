@@ -481,7 +481,7 @@ exports.get_profile = async (req, res) => {
             });
         } else {
             // Query User collection (moderator/admin)
-            const user = await User.findById(req.user.id).select('_id full_name email role phone_number profile_picture created_at');
+            const user = await User.findById(req.user.id).select('_id full_name email role phone_number created_at');
 
             if (user) {
                 return res.json(user);
@@ -514,7 +514,6 @@ exports.get_profile = async (req, res) => {
 exports.update_profile = async (req, res) => {
     try {
         const { full_name, phone_number, age, gender, medical_history, language } = req.body;
-        const profile_picture = req.file ? req.file.filename : undefined;
 
         // Use role from JWT token to determine which collection to update
         if (req.user.role === 'pilgrim') {
@@ -547,15 +546,11 @@ exports.update_profile = async (req, res) => {
                 ...(phone_number && { phone_number })
             };
 
-            if (profile_picture) {
-                updateData.profile_picture = profile_picture;
-            }
-
             const updatedUser = await User.findByIdAndUpdate(
                 req.user.id,
                 updateData,
                 { new: true }
-            ).select('_id full_name email role phone_number profile_picture created_at');
+            ).select('_id full_name email role phone_number created_at');
 
             if (!updatedUser) {
                 return res.status(404).json({ message: "Profile not found" });

@@ -25,7 +25,9 @@ const call_history_routes = require('./routes/call_history_routes');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    pingTimeout: 10000, // Wait 10s before considering dead (default 20000)
+    pingInterval: 5000  // Send ping every 5s (default 25000)
 });
 
 // Initialize Sockets

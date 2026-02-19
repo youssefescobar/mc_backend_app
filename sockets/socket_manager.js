@@ -1,3 +1,6 @@
+const User = require('../models/user_model');
+const Pilgrim = require('../models/pilgrim_model');
+
 const initializeSockets = (io) => {
     io.on('connection', (socket) => {
         console.log(`[Socket] User connected: ${socket.id}`);
@@ -6,6 +9,15 @@ const initializeSockets = (io) => {
         socket.on('join_group', (groupId) => {
             if (groupId) {
                 socket.join(`group_${groupId}`);
+                socket.data.groupId = groupId;
+                if (socket.data.userId) {
+                    // Notify group that user is active
+                    io.to(`group_${groupId}`).emit('status_update', {
+                        pilgrimId: socket.data.userId,
+                        active: true,
+                        last_active_at: new Date()
+                    });
+                }
                 console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
             }
         });
@@ -14,6 +26,9 @@ const initializeSockets = (io) => {
         socket.on('leave_group', (groupId) => {
             if (groupId) {
                 socket.leave(`group_${groupId}`);
+                // Don't remove groupId from data here, as they might just be switching screens but still connected? 
+                // Actually if they leave group explicitly, maybe we shouldn't track them for that group on disconnect.
+                // But for now, let's keep it simple.
                 console.log(`[Socket] User ${socket.id} left group_${groupId}`);
             }
         });
@@ -42,9 +57,92 @@ const initializeSockets = (io) => {
 
         // --- WebRTC Signaling for Calls ---
         // Map of userId <-> socketId (for direct signaling)
-        socket.on('register-user', ({ userId }) => {
+        socket.on('register-user', async ({ userId, role }) => {
             socket.data.userId = userId;
-            console.log(`[Socket] User registered for calls: ${userId} -> ${socket.id}`);
+            socket.data.role = role || 'pilgrim'; // Default to pilgrim if not sent, but better to send it
+            console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
+
+            // Update active status to TRUE
+            try {
+                if (socket.data.role === 'pilgrim') {
+                    await Pilgrim.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
+                } else {
+                    await User.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
+                }
+            } catch (err) {
+                console.error('[Socket] Error updating active status (connect):', err);
+            }
+        });
+
+        // Helper to find socket by userId
+        function getSocketByUserId(userId) {
+            return Array.from(io.sockets.sockets.values()).find(s => s.data.userId === userId);
+        }
+
+        socket.on('call-offer', async ({ to, offer }) => {
+            // ... existing call logic ...
+            // (I will skip replacing the entire call logic block to avoid huge output, just target the parts I need)
+            // Wait, I can't skip parts in replace_file_content if I want to match a contiguous block. 
+            // I selected a huge block in my thought process but I should be careful. 
+            // Let's just update the specific blocks.
+        });
+
+        // Leave a group room
+        // Join a group room
+        socket.on('join_group', (groupId) => {
+            if (groupId) {
+                socket.join(`group_${groupId}`);
+                socket.data.groupId = groupId;
+                if (socket.data.userId) {
+                    // Notify group that user is active
+                    io.to(`group_${groupId}`).emit('status_update', {
+                        pilgrimId: socket.data.userId,
+                        active: true,
+                        last_active_at: new Date()
+                    });
+                }
+                console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
+            }
+        });
+
+        // Handle Location Updates
+        socket.on('update_location', (data) => {
+            // data Expects: { groupId, pilgrimId, lat, lng, ... }
+            const { groupId } = data;
+            if (groupId) {
+                // Broadcast to others in the group (e.g. moderators)
+                socket.to(`group_${groupId}`).emit('location_update', data);
+                // console.log(`[Socket] Location update from ${data.pilgrimId}`);
+            }
+        });
+
+        // Handle SOS Alerts
+        socket.on('sos_alert', (data) => {
+            // data Expects: { groupId, pilgrimId, message, location, ... }
+            const { groupId } = data;
+            if (groupId) {
+                // Broadcast to everyone in group (so moderators see it immediately)
+                io.to(`group_${groupId}`).emit('sos_alert', data);
+                console.log(`[Socket] SOS Alert from ${data.pilgrimId} in group_${groupId}`);
+            }
+        });
+
+        // Map of userId <-> socketId (for direct signaling)
+        socket.on('register-user', async ({ userId, role }) => {
+            socket.data.userId = userId;
+            socket.data.role = role || 'pilgrim'; // Default to pilgrim if not sent, but better to send it
+            console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
+
+            // Update active status to TRUE
+            try {
+                if (socket.data.role === 'pilgrim') {
+                    await Pilgrim.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
+                } else {
+                    await User.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
+                }
+            } catch (err) {
+                console.error('[Socket] Error updating active status (connect):', err);
+            }
         });
 
         // Helper to find socket by userId
@@ -289,8 +387,32 @@ const initializeSockets = (io) => {
             }
         });
 
-        socket.on('disconnect', () => {
-            console.log(`[Socket] User disconnected: ${socket.id}`);
+
+
+        socket.on('disconnect', async (reason) => {
+            const { userId, role, groupId } = socket.data;
+            console.log(`[Socket] User disconnected: ${socket.id} (Reason: ${reason})`);
+            console.log(`[Socket] Debug Data - User: ${userId}, Role: ${role}, Group: ${groupId}`);
+
+            if (userId) {
+                try {
+                    if (role === 'pilgrim') {
+                        await Pilgrim.findByIdAndUpdate(userId, { is_online: false, last_active_at: new Date() });
+                    } else {
+                        await User.findByIdAndUpdate(userId, { is_online: false, last_active_at: new Date() });
+                    }
+
+                    if (groupId) {
+                        io.to(`group_${groupId}`).emit('status_update', {
+                            pilgrimId: userId,
+                            active: false,
+                            last_active_at: new Date()
+                        });
+                    }
+                } catch (err) {
+                    console.error('[Socket] Error updating active status (disconnect):', err);
+                }
+            }
         });
     });
 };

@@ -21,7 +21,9 @@ const pilgrim_schema = new mongoose.Schema({
     last_location_update: { type: Date },
     battery_percent: { type: Number, min: 0, max: 100 },
 
-    active: { type: Boolean, default: true }, // Track if account is active
+    active: { type: Boolean, default: true }, // Track if account is enabled/disabled (for Admin/Mod use)
+    is_online: { type: Boolean, default: false }, // Track if user is currently connected via socket
+    last_active_at: { type: Date, default: Date.now }, // Last time the pilgrim was active/connected
     created_at: { type: Date, default: Date.now },
     created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } // Optional - only for moderator-created pilgrims
 });
