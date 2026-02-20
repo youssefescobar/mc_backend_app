@@ -136,9 +136,9 @@ const initializeSockets = (io) => {
             // Update active status to TRUE
             try {
                 if (socket.data.role === 'pilgrim') {
-                    await Pilgrim.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
+                    await Pilgrim.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
                 } else {
-                    await User.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
+                    await User.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
                 }
             } catch (err) {
                 console.error('[Socket] Error updating active status (connect):', err);
