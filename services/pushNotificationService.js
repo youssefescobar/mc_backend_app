@@ -27,10 +27,10 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         // We can add APNS (iOS) config here if needed later
     };
 
-    if (isUrgentTTS) {
-        // Data-Only for Urgent TTS: 
-        // We omit the 'notification' key so the system doesn't show a banner/sound automatically.
-        // Omitting 'notification' key is enough.
+    if (isUrgentTTS || isIncomingCall) {
+        // Data-Only: app handles presentation itself.
+        // - Urgent TTS → app plays sound + TTS via BackgroundNotificationTask
+        // - Incoming Call → app shows Notifee fullScreenIntent via BackgroundNotificationTask
     } else {
         // Standard Notification for everything else (Urgent Text, Urgent Voice, Normal messages, Incoming Calls)
         message.notification = {

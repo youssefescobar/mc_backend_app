@@ -202,28 +202,10 @@ const initializeSockets = (io) => {
                 socket.data.currentCallId = callRecord._id;
 
                 if (target) {
-                    // Recipient is online - send via socket
+                    // Recipient is online — send via socket only.
+                    // No FCM push needed; the app's CallModal handles it via the socket event.
                     console.log(`[Socket] Sending call-offer via socket to ${to}`);
                     target.emit('call-offer', { offer, from: socket.data.userId, callerInfo });
-
-                    // ALSO send push notification for reliability (app might be backgrounded)
-                    if (recipient?.fcm_token) {
-                        console.log(`[Socket] Also sending push notification (app might be backgrounded)...`);
-                        await sendPushNotification(
-                            [recipient.fcm_token],
-                            'Incoming Call',
-                            `${callerInfo.name} is calling you`,
-                            {
-                                type: 'incoming_call',
-                                callerId: socket.data.userId,
-                                callerName: callerInfo.name,
-                                callerRole: callerInfo.role,
-                                offer: JSON.stringify(offer)
-                            },
-                            true // isUrgent - use high priority
-                        );
-                        console.log(`[Socket] ✓ Push notification sent as backup`);
-                    }
                 } else {
                     console.log(`[Socket] Recipient ${to} is offline, sending push notification`);
 
