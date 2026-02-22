@@ -109,7 +109,7 @@ exports.trigger_sos = async (req, res) => {
 
         // Find the group this pilgrim belongs to
         const group = await Group.findOne({ pilgrim_ids: req.user.id })
-            .populate('moderator_ids', '_id full_name');
+            .populate('moderator_ids', '_id full_name fcm_token');
 
         if (!group) {
             return res.status(404).json({ message: 'Not assigned to any group' });
@@ -141,6 +141,54 @@ exports.trigger_sos = async (req, res) => {
         }));
 
         await Notification.insertMany(notifications);
+
+        // Emit real-time SOS alert via Socket.io to group
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`group_${group._id}`).emit('sos-alert-received', {
+                pilgrim_id: pilgrim._id,
+                pilgrim_name: pilgrim.full_name,
+                pilgrim_phone: pilgrim.phone_number,
+                location: {
+                    lat: pilgrim.current_latitude,
+                    lng: pilgrim.current_longitude
+                },
+                group_id: group._id,
+                group_name: group.group_name,
+                timestamp: new Date()
+            });
+            console.log(`[API] SOS alert emitted to group ${group._id}`);
+        }
+
+        // Send push notifications to all moderators
+        const { sendPushNotification } = require('../services/pushNotificationService');
+        const moderatorTokens = group.moderator_ids
+            .filter(m => m.fcm_token)
+            .map(m => m.fcm_token);
+
+        if (group.created_by?.fcm_token && !moderatorTokens.includes(group.created_by.fcm_token)) {
+            moderatorTokens.push(group.created_by.fcm_token);
+        }
+
+        if (moderatorTokens.length > 0) {
+            await sendPushNotification(
+                moderatorTokens,
+                '🚨 SOS ALERT',
+                `${pilgrim.full_name} needs immediate help in ${group.group_name}`,
+                {
+                    type: 'sos_alert',
+                    pilgrim_id: pilgrim._id.toString(),
+                    pilgrim_name: pilgrim.full_name,
+                    pilgrim_phone: pilgrim.phone_number,
+                    lat: (pilgrim.current_latitude || 0).toString(),
+                    lng: (pilgrim.current_longitude || 0).toString(),
+                    group_id: group._id.toString(),
+                    group_name: group.group_name
+                },
+                true // is_urgent
+            );
+            console.log(`[API] SOS push notifications sent to ${moderatorTokens.length} moderators`);
+        }
 
         logger.warn(`SOS Alert triggered by ${pilgrim.full_name} (${pilgrim._id}) in group ${group.group_name}`);
 

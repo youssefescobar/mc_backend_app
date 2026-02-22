@@ -107,22 +107,30 @@ const initializeSockets = (io) => {
 
         // Handle Location Updates
         socket.on('update_location', (data) => {
-            // data Expects: { groupId, pilgrimId, lat, lng, ... }
-            const { groupId } = data;
+            // data Expects: { groupId, pilgrimId, lat, lng, battery_percent, ... }
+            const { groupId, pilgrimId, battery_percent } = data;
             if (groupId) {
-                // Broadcast to others in the group (e.g. moderators)
+                // Broadcast location to others in the group (e.g. moderators)
                 socket.to(`group_${groupId}`).emit('location_update', data);
+                
+                // Emit battery update to the individual user (for real-time battery display)
+                if (battery_percent !== undefined) {
+                    const pilgrimSocket = getSocketByUserId(pilgrimId);
+                    if (pilgrimSocket) {
+                        pilgrimSocket.emit('battery-update', { battery_percent, pilgrimId });
+                    }
+                }
                 // console.log(`[Socket] Location update from ${data.pilgrimId}`);
             }
         });
 
-        // Handle SOS Alerts
+        // Handle SOS Alerts (from client socket or API)
         socket.on('sos_alert', (data) => {
             // data Expects: { groupId, pilgrimId, message, location, ... }
             const { groupId } = data;
             if (groupId) {
                 // Broadcast to everyone in group (so moderators see it immediately)
-                io.to(`group_${groupId}`).emit('sos_alert', data);
+                io.to(`group_${groupId}`).emit('sos-alert-received', data);
                 console.log(`[Socket] SOS Alert from ${data.pilgrimId} in group_${groupId}`);
             }
         });
@@ -335,16 +343,27 @@ const initializeSockets = (io) => {
                                 targetUser = await Pilgrim.findById(targetUserId).select('fcm_token full_name');
                             }
 
-                            if (targetUser?.fcm_token) {
-                                // Get caller name
-                                let callerName = 'Someone';
-                                if (socket.data.userId === callRecord.caller_id.toString()) {
-                                    // I am caller
-                                    let me = await User.findById(socket.data.userId).select('full_name');
-                                    if (!me) me = await Pilgrim.findById(socket.data.userId).select('full_name');
-                                    callerName = me?.full_name || 'Unknown';
-                                }
+                            // Get caller name
+                            let callerName = 'Someone';
+                            if (socket.data.userId === callRecord.caller_id.toString()) {
+                                // I am caller
+                                let me = await User.findById(socket.data.userId).select('full_name');
+                                if (!me) me = await Pilgrim.findById(socket.data.userId).select('full_name');
+                                callerName = me?.full_name || 'Unknown';
+                            }
 
+                            // Emit real-time missed call event to receiver (if socket connected)
+                            const targetSocket = getSocketByUserId(targetUserId);
+                            if (targetSocket) {
+                                targetSocket.emit('missed-call-received', {
+                                    callId: callRecord._id.toString(),
+                                    callerId: socket.data.userId,
+                                    callerName: callerName
+                                });
+                                console.log(`[Socket] ✓ Missed call event emitted to ${targetUserId}`);
+                            }
+
+                            if (targetUser?.fcm_token) {
                                 await sendPushNotification(
                                     [targetUser.fcm_token],
                                     'Missed Call',

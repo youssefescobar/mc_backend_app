@@ -28,26 +28,28 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
     };
 
     if (isUrgentTTS || isIncomingCall) {
-        // Data-Only: app handles presentation itself.
-        // - Urgent TTS → app plays sound + TTS via BackgroundNotificationTask
-        // - Incoming Call → app shows Notifee fullScreenIntent via BackgroundNotificationTask
+        // DATA-ONLY: app JS runtime handles the full presentation via BackgroundNotificationTask.
+        // - Urgent TTS   → plays sound + TTS sequence
+        // - Incoming Call → Notifee shows fullScreenIntent (handles both screen-on and screen-off)
+        //
+        // DO NOT add a notification block here for incoming_call.
+        // A notification block causes Android to show the FCM notification itself AND skip
+        // invoking the expo-notifications background task — breaking Notifee's call UI.
+        // High-priority data-only FCM DOES wake the Android process even when killed.
+        console.log(`[FCM] Sending data-only ${isIncomingCall ? 'incoming_call' : 'urgent TTS'} (background task will handle UI)`);
     } else {
-        // Standard Notification for everything else (Urgent Text, Urgent Voice, Normal messages, Incoming Calls)
+        // Standard Notification for everything else (messages, urgent text, etc.)
         message.notification = {
             title: title,
             body: body,
         };
 
         message.android.notification = {
-            channelId: isIncomingCall ? 'incoming_call' : (isUrgent ? 'urgent' : 'default'),
-            // sound: isUrgent ? 'urgent.wav' : 'default', // Let channel handle sound for default
+            channelId: isUrgent ? 'urgent' : 'default',
             sound: isUrgent ? 'urgent.wav' : undefined,
-            priority: 'max', // Force heads-up for all notifications
+            priority: 'max',
             visibility: 'public',
         };
-
-        // Note: FCM doesn't support action buttons in the notification payload directly
-        // Action buttons need to be handled on the client side using Expo Notifications
 
         console.log('Sending Standard Notification:', JSON.stringify(message, null, 2));
     }
