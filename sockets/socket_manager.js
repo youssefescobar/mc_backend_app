@@ -5,143 +5,12 @@ const initializeSockets = (io) => {
     io.on('connection', (socket) => {
         console.log(`[Socket] User connected: ${socket.id}`);
 
-        // Join a group room
-        socket.on('join_group', (groupId) => {
-            if (groupId) {
-                socket.join(`group_${groupId}`);
-                socket.data.groupId = groupId;
-                if (socket.data.userId) {
-                    // Notify group that user is active
-                    io.to(`group_${groupId}`).emit('status_update', {
-                        pilgrimId: socket.data.userId,
-                        active: true,
-                        last_active_at: new Date()
-                    });
-                }
-                console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
-            }
-        });
-
-        // Leave a group room
-        socket.on('leave_group', (groupId) => {
-            if (groupId) {
-                socket.leave(`group_${groupId}`);
-                // Don't remove groupId from data here, as they might just be switching screens but still connected? 
-                // Actually if they leave group explicitly, maybe we shouldn't track them for that group on disconnect.
-                // But for now, let's keep it simple.
-                console.log(`[Socket] User ${socket.id} left group_${groupId}`);
-            }
-        });
-
-        // Handle Location Updates
-        socket.on('update_location', (data) => {
-            // data Expects: { groupId, pilgrimId, lat, lng, ... }
-            const { groupId } = data;
-            if (groupId) {
-                // Broadcast to others in the group (e.g. moderators)
-                socket.to(`group_${groupId}`).emit('location_update', data);
-                // console.log(`[Socket] Location update from ${data.pilgrimId}`);
-            }
-        });
-
-        // Handle SOS Alerts
-        socket.on('sos_alert', (data) => {
-            // data Expects: { groupId, pilgrimId, message, location, ... }
-            const { groupId } = data;
-            if (groupId) {
-                // Broadcast to everyone in group (so moderators see it immediately)
-                io.to(`group_${groupId}`).emit('sos_alert', data);
-                console.log(`[Socket] SOS Alert from ${data.pilgrimId} in group_${groupId}`);
-            }
-        });
-
-        // --- WebRTC Signaling for Calls ---
-        // Map of userId <-> socketId (for direct signaling)
+        // ── User Registration ──────────────────────────────────────────────────
         socket.on('register-user', async ({ userId, role }) => {
             socket.data.userId = userId;
-            socket.data.role = role || 'pilgrim'; // Default to pilgrim if not sent, but better to send it
+            socket.data.role = role || 'pilgrim';
             console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
 
-            // Update active status to TRUE
-            try {
-                if (socket.data.role === 'pilgrim') {
-                    await Pilgrim.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
-                } else {
-                    await User.findByIdAndUpdate(userId, { active: true, last_active_at: new Date() });
-                }
-            } catch (err) {
-                console.error('[Socket] Error updating active status (connect):', err);
-            }
-        });
-
-        // Helper to find socket by userId
-        function getSocketByUserId(userId) {
-            return Array.from(io.sockets.sockets.values()).find(s => s.data.userId === userId);
-        }
-
-        socket.on('call-offer', async ({ to, offer }) => {
-            // ... existing call logic ...
-            // (I will skip replacing the entire call logic block to avoid huge output, just target the parts I need)
-            // Wait, I can't skip parts in replace_file_content if I want to match a contiguous block. 
-            // I selected a huge block in my thought process but I should be careful. 
-            // Let's just update the specific blocks.
-        });
-
-        // Leave a group room
-        // Join a group room
-        socket.on('join_group', (groupId) => {
-            if (groupId) {
-                socket.join(`group_${groupId}`);
-                socket.data.groupId = groupId;
-                if (socket.data.userId) {
-                    // Notify group that user is active
-                    io.to(`group_${groupId}`).emit('status_update', {
-                        pilgrimId: socket.data.userId,
-                        active: true,
-                        last_active_at: new Date()
-                    });
-                }
-                console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
-            }
-        });
-
-        // Handle Location Updates
-        socket.on('update_location', (data) => {
-            // data Expects: { groupId, pilgrimId, lat, lng, battery_percent, ... }
-            const { groupId, pilgrimId, battery_percent } = data;
-            if (groupId) {
-                // Broadcast location to others in the group (e.g. moderators)
-                socket.to(`group_${groupId}`).emit('location_update', data);
-                
-                // Emit battery update to the individual user (for real-time battery display)
-                if (battery_percent !== undefined) {
-                    const pilgrimSocket = getSocketByUserId(pilgrimId);
-                    if (pilgrimSocket) {
-                        pilgrimSocket.emit('battery-update', { battery_percent, pilgrimId });
-                    }
-                }
-                // console.log(`[Socket] Location update from ${data.pilgrimId}`);
-            }
-        });
-
-        // Handle SOS Alerts (from client socket or API)
-        socket.on('sos_alert', (data) => {
-            // data Expects: { groupId, pilgrimId, message, location, ... }
-            const { groupId } = data;
-            if (groupId) {
-                // Broadcast to everyone in group (so moderators see it immediately)
-                io.to(`group_${groupId}`).emit('sos-alert-received', data);
-                console.log(`[Socket] SOS Alert from ${data.pilgrimId} in group_${groupId}`);
-            }
-        });
-
-        // Map of userId <-> socketId (for direct signaling)
-        socket.on('register-user', async ({ userId, role }) => {
-            socket.data.userId = userId;
-            socket.data.role = role || 'pilgrim'; // Default to pilgrim if not sent, but better to send it
-            console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
-
-            // Update active status to TRUE
             try {
                 if (socket.data.role === 'pilgrim') {
                     await Pilgrim.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
@@ -149,50 +18,85 @@ const initializeSockets = (io) => {
                     await User.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
                 }
             } catch (err) {
-                console.error('[Socket] Error updating active status (connect):', err);
+                console.error('[Socket] Error updating online status (connect):', err);
             }
         });
 
-        // Helper to find socket by userId
+        // ── Helper: find socket by userId ──────────────────────────────────────
         function getSocketByUserId(userId) {
             return Array.from(io.sockets.sockets.values()).find(s => s.data.userId === userId);
         }
 
+        // ── Group Rooms ────────────────────────────────────────────────────────
+        socket.on('join_group', (groupId) => {
+            if (groupId) {
+                socket.join(`group_${groupId}`);
+                socket.data.groupId = groupId;
+                if (socket.data.userId) {
+                    io.to(`group_${groupId}`).emit('status_update', {
+                        pilgrimId: socket.data.userId,
+                        active: true,
+                        last_active_at: new Date()
+                    });
+                }
+                console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
+            }
+        });
+
+        socket.on('leave_group', (groupId) => {
+            if (groupId) {
+                socket.leave(`group_${groupId}`);
+                console.log(`[Socket] User ${socket.id} left group_${groupId}`);
+            }
+        });
+
+        // ── Location Updates ───────────────────────────────────────────────────
+        socket.on('update_location', (data) => {
+            const { groupId, pilgrimId, battery_percent } = data;
+            if (groupId) {
+                socket.to(`group_${groupId}`).emit('location_update', data);
+
+                if (battery_percent !== undefined) {
+                    const pilgrimSocket = getSocketByUserId(pilgrimId);
+                    if (pilgrimSocket) {
+                        pilgrimSocket.emit('battery-update', { battery_percent, pilgrimId });
+                    }
+                }
+            }
+        });
+
+        // ── SOS Alerts ────────────────────────────────────────────────────────
+        socket.on('sos_alert', (data) => {
+            const { groupId } = data;
+            if (groupId) {
+                io.to(`group_${groupId}`).emit('sos-alert-received', data);
+                console.log(`[Socket] SOS Alert from ${data.pilgrimId} in group_${groupId}`);
+            }
+        });
+
+        // ── WebRTC Call Signaling ──────────────────────────────────────────────
+
         socket.on('call-offer', async ({ to, offer }) => {
             console.log(`[Socket] Call offer from ${socket.data.userId} to ${to}`);
-            const target = getSocketByUserId(to);
-            console.log(`[Socket] Target socket found: ${target ? 'YES (socket id: ' + target.id + ')' : 'NO (will send push notification)'}`);
 
-            // Fetch caller information from database and create call record
+            const { sendPushNotification } = require('../services/pushNotificationService');
+            const CallHistory = require('../models/call_history_model');
+
             try {
-                const User = require('../models/user_model');
-                const Pilgrim = require('../models/pilgrim_model');
-                const CallHistory = require('../models/call_history_model');
-                const { sendPushNotification } = require('../services/pushNotificationService');
-
-                console.log(`[Socket] Fetching caller info for userId: ${socket.data.userId}`);
-
-                // Try to find in User model first (moderators)
+                // Fetch caller info
                 let caller = await User.findById(socket.data.userId).select('full_name role');
-
-                // If not found, try Pilgrim model
-                if (!caller) {
-                    caller = await Pilgrim.findById(socket.data.userId).select('full_name role');
-                }
-
-                console.log(`[Socket] Caller found:`, caller);
+                if (!caller) caller = await Pilgrim.findById(socket.data.userId).select('full_name role');
 
                 const callerInfo = {
                     id: socket.data.userId,
                     name: caller?.full_name || 'Unknown',
                     role: caller?.role || 'Unknown'
                 };
+                console.log(`[Socket] Caller info:`, callerInfo);
 
-                // Always fetch recipient for potential push notification
+                // Fetch recipient info (for FCM token)
                 let recipient = await User.findById(to).select('fcm_token full_name role');
-                if (!recipient) {
-                    recipient = await Pilgrim.findById(to).select('fcm_token full_name role');
-                }
+                if (!recipient) recipient = await Pilgrim.findById(to).select('fcm_token full_name role');
 
                 // Create call history record
                 const caller_model = caller?.role === 'pilgrim' ? 'Pilgrim' : 'User';
@@ -205,46 +109,54 @@ const initializeSockets = (io) => {
                     call_type: 'internet',
                     status: 'ringing'
                 });
-                console.log(`[Socket] Call record created: ${callRecord._id}`);
-                // Store call record ID in socket data for later updates
                 socket.data.currentCallId = callRecord._id;
+                console.log(`[Socket] Call record created: ${callRecord._id}`);
 
-                if (target) {
-                    // Recipient socket is connected — send via socket for in-app UI
-                    console.log(`[Socket] Sending call-offer via socket to ${to}`);
-                    target.emit('call-offer', { offer, from: socket.data.userId, callerInfo });
+                // Check if recipient is reachable via socket
+                const targetSocket = getSocketByUserId(to);
+
+                if (targetSocket) {
+                    // ── Recipient has active socket ──────────────────────────────
+                    // Send via socket ONLY. The app's CallContext handles the call UI.
+                    // If the app is backgrounded, CallContext will show its own Notifee notification.
+                    // We do NOT also send FCM to avoid the double-UI race condition.
+                    console.log(`[Socket] Recipient ${to} has active socket — sending call-offer via socket ONLY`);
+                    targetSocket.emit('call-offer', { offer, from: socket.data.userId, callerInfo });
+                } else {
+                    // ── Recipient has no socket (killed/offline) ─────────────────
+                    // Send FCM only. The BackgroundNotificationTask + Notifee will show the call UI.
+                    console.log(`[Socket] Recipient ${to} has no socket — sending FCM for call notification`);
+
+                    if (recipient?.fcm_token) {
+                        await sendPushNotification(
+                            [recipient.fcm_token],
+                            callerInfo.name,
+                            `Incoming call`,
+                            {
+                                type: 'incoming_call',
+                                callerId: socket.data.userId,
+                                callerName: callerInfo.name,
+                                callerRole: callerInfo.role,
+                                offer: JSON.stringify(offer)
+                            },
+                            true // high priority
+                        );
+                        console.log(`[Socket] ✓ Call FCM sent to ${recipient.full_name}`);
+                    } else {
+                        console.log(`[Socket] Recipient ${to} has no FCM token — call may be missed`);
+                    }
                 }
-
-                // ALWAYS send FCM so the device can show the native call screen
-                // if the app is backgrounded (socket connected but app has no UI access).
-                // The BackgroundNotificationTask only fires when backgrounded/killed, so
-                // there is NO double notification when the app is in the foreground.
-                if (recipient?.fcm_token) {
-                    console.log(`[Socket] Sending call FCM to ${recipient.full_name} (${target ? 'also has socket' : 'offline'})...`);
-                    await sendPushNotification(
-                        [recipient.fcm_token],
-                        'Incoming Call',
-                        `${callerInfo.name} is calling you`,
-                        {
-                            type: 'incoming_call',
-                            callerId: socket.data.userId,
-                            callerName: callerInfo.name,
-                            callerRole: callerInfo.role,
-                            offer: JSON.stringify(offer)
-                        },
-                        true // high priority
-                    );
-                    console.log(`[Socket] ✓ Call FCM sent`);
-                }
-
 
             } catch (error) {
-                console.error('[Socket] Error fetching caller info:', error);
-                if (target) {
-                    target.emit('call-offer', { offer, from: socket.data.userId });
+                console.error('[Socket] Error in call-offer handler:', error);
+                // Fallback: try to deliver via socket if possible
+                const targetSocket = getSocketByUserId(to);
+                if (targetSocket) {
+                    targetSocket.emit('call-offer', { offer, from: socket.data.userId });
                 }
             }
         });
+
         socket.on('call-answer', async ({ to, answer }) => {
             console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
             const target = getSocketByUserId(to);
@@ -268,6 +180,7 @@ const initializeSockets = (io) => {
                 console.log(`[Socket] Target user ${to} not found for call answer`);
             }
         });
+
         socket.on('ice-candidate', ({ to, candidate }) => {
             const target = getSocketByUserId(to);
             if (target) {
@@ -281,7 +194,6 @@ const initializeSockets = (io) => {
             if (target) {
                 target.emit('call-declined', { from: socket.data.userId });
 
-                // Update call record to declined
                 try {
                     const CallHistory = require('../models/call_history_model');
                     if (target.data.currentCallId) {
@@ -305,12 +217,9 @@ const initializeSockets = (io) => {
                 target.emit('call-end', { from: socket.data.userId });
             }
 
-            // Update call record to completed
             try {
                 const CallHistory = require('../models/call_history_model');
                 const { sendPushNotification } = require('../services/pushNotificationService');
-                const User = require('../models/user_model');
-                const Pilgrim = require('../models/pilgrim_model');
 
                 if (socket.data.currentCallId) {
                     const callRecord = await CallHistory.findById(socket.data.currentCallId);
@@ -320,9 +229,6 @@ const initializeSockets = (io) => {
                             ? Math.floor((new Date() - callRecord.started_at) / 1000)
                             : 0;
 
-                        // Identify the OTHER person (the one who missed the call)
-                        // If I am caller, other is receiver. If I am receiver (unlikely for call-end), other is caller.
-                        // Usually call-end comes from caller hanging up.
                         let targetUserId = callRecord.receiver_id.toString();
                         if (socket.data.userId === targetUserId) {
                             targetUserId = callRecord.caller_id.toString();
@@ -336,32 +242,28 @@ const initializeSockets = (io) => {
                         console.log(`[Socket] Call record updated: ${isMissed ? 'missed' : 'completed'}, duration: ${duration}s`);
 
                         if (isMissed) {
-                            // Send Missed Call Notification
-                            console.log(`[Socket] Sending missed call notification to ${targetUserId}`);
-                            let targetUser = await User.findById(targetUserId).select('fcm_token full_name');
-                            if (!targetUser) {
-                                targetUser = await Pilgrim.findById(targetUserId).select('fcm_token full_name');
-                            }
+                            // Emit real-time missed call event so recipient can update their badge
+                            const targetSocket = getSocketByUserId(targetUserId);
 
-                            // Get caller name
                             let callerName = 'Someone';
                             if (socket.data.userId === callRecord.caller_id.toString()) {
-                                // I am caller
                                 let me = await User.findById(socket.data.userId).select('full_name');
                                 if (!me) me = await Pilgrim.findById(socket.data.userId).select('full_name');
                                 callerName = me?.full_name || 'Unknown';
                             }
 
-                            // Emit real-time missed call event to receiver (if socket connected)
-                            const targetSocket = getSocketByUserId(targetUserId);
                             if (targetSocket) {
                                 targetSocket.emit('missed-call-received', {
                                     callId: callRecord._id.toString(),
                                     callerId: socket.data.userId,
-                                    callerName: callerName
+                                    callerName
                                 });
                                 console.log(`[Socket] ✓ Missed call event emitted to ${targetUserId}`);
                             }
+
+                            // Also send push for missed call (standard notification, not full-screen)
+                            let targetUser = await User.findById(targetUserId).select('fcm_token full_name');
+                            if (!targetUser) targetUser = await Pilgrim.findById(targetUserId).select('fcm_token full_name');
 
                             if (targetUser?.fcm_token) {
                                 await sendPushNotification(
@@ -372,7 +274,7 @@ const initializeSockets = (io) => {
                                         type: 'missed_call',
                                         callId: callRecord._id.toString(),
                                         callerId: socket.data.userId,
-                                        callerName: callerName
+                                        callerName
                                     }
                                 );
                                 console.log(`[Socket] ✓ Missed call notification sent to ${targetUser.full_name}`);
@@ -383,16 +285,32 @@ const initializeSockets = (io) => {
                     }
                 }
             } catch (error) {
-                console.error('[Socket] Error updating call record:', error);
+                console.error('[Socket] Error updating call record on call-end:', error);
             }
         });
 
+        // call-cancel: caller hung up while recipient had a Notifee notification open
+        // This tells the recipient's app to dismiss the incoming call notification/UI
+        socket.on('call-cancel', ({ to }) => {
+            console.log(`[Socket] Call cancelled by ${socket.data.userId}, notifying ${to}`);
+            const target = getSocketByUserId(to);
+            if (target) {
+                target.emit('call-cancel', { from: socket.data.userId });
+            }
+        });
 
+        socket.on('call-busy', ({ to }) => {
+            console.log(`[Socket] Call busy from ${socket.data.userId} to ${to}`);
+            const target = getSocketByUserId(to);
+            if (target) {
+                target.emit('call-busy', { from: socket.data.userId });
+            }
+        });
 
+        // ── Disconnect ────────────────────────────────────────────────────────
         socket.on('disconnect', async (reason) => {
             const { userId, role, groupId } = socket.data;
-            console.log(`[Socket] User disconnected: ${socket.id} (Reason: ${reason})`);
-            console.log(`[Socket] Debug Data - User: ${userId}, Role: ${role}, Group: ${groupId}`);
+            console.log(`[Socket] User disconnected: ${socket.id} (Reason: ${reason}, User: ${userId})`);
 
             if (userId) {
                 try {
@@ -410,7 +328,7 @@ const initializeSockets = (io) => {
                         });
                     }
                 } catch (err) {
-                    console.error('[Socket] Error updating active status (disconnect):', err);
+                    console.error('[Socket] Error updating online status (disconnect):', err);
                 }
             }
         });
