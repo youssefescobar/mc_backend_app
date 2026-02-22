@@ -6,29 +6,40 @@ const { logger } = require('./logger');
 const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
 
 if (fs.existsSync(serviceAccountPath)) {
-    // Prefer local file if it exists (for local development)
+    // Local development — use the key file directly
     const serviceAccount = require(serviceAccountPath);
     try {
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
-        logger.info('Firebase Admin Initialized successfully from file');
+        admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+        logger.info('Firebase Admin initialized from serviceAccountKey.json');
     } catch (error) {
         logger.error(`Error initializing Firebase Admin: ${error.message}`);
     }
-} else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    // Fallback to environment variable (for Railway)
+
+} else if (
+    process.env.FIREBASE_PROJECT_ID &&
+    process.env.FIREBASE_CLIENT_EMAIL &&
+    process.env.FIREBASE_PRIVATE_KEY
+) {
+    // Production — use individual environment variables (no JSON blob needed)
     try {
-        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
+            credential: admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                // Cloud Run / most CI systems escape \n as \\n in env vars — unescape it
+                privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            }),
         });
-        logger.info('Firebase Admin Initialized successfully from ENV');
+        logger.info('Firebase Admin initialized from environment variables');
     } catch (error) {
-        logger.error(`Error initializing Firebase from ENV: ${error.message}`);
+        logger.error(`Error initializing Firebase Admin from ENV: ${error.message}`);
     }
+
 } else {
-    logger.warn('WARNING: FIREBASE_SERVICE_ACCOUNT env var not set and serviceAccountKey.json not found in config/. Notifications will not work.');
+    logger.warn(
+        'Firebase Admin NOT initialized. Set FIREBASE_PROJECT_ID, ' +
+        'FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY environment variables.'
+    );
 }
 
 module.exports = admin;

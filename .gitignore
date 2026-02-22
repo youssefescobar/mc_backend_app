@@ -2,3 +2,5 @@
 .env
 /uploads
 config/serviceAccountKey.json
+redploy_cloudrun.ps1
+
