@@ -6,6 +6,7 @@ const Group = require('../models/group_model');
 const Notification = require('../models/notification_model');
 const PendingPilgrim = require('../models/pending_pilgrim_model');
 const { sendGroupInvitationEmail } = require('../config/email_service');
+const { sendPushNotification } = require('../services/pushNotificationService');
 const { logger } = require('../config/logger');
 
 // Send invitation to another moderator
@@ -159,18 +160,40 @@ const accept_invitation = async (req, res) => {
             { read: true }
         );
 
-        // Notify the inviter
+        // Notify the inviter (DB record + FCM push)
+        const acceptee_name = account?.full_name || req.user.full_name || 'Someone';
+        const invite_msg = `${acceptee_name} accepted your invitation to join "${invitation.group_id.group_name}"`;
+
         await Notification.create({
             user_id: invitation.inviter_id,
             type: 'invitation_accepted',
             title: 'Invitation Accepted',
-            message: `${req.user.full_name || account.full_name} accepted your invitation to join "${invitation.group_id.group_name}"`,
+            message: invite_msg,
             data: {
                 invitation_id: invitation._id,
                 group_id: invitation.group_id._id,
                 group_name: invitation.group_id.group_name
             }
         });
+
+        // Send FCM push to the inviter device
+        try {
+            const inviter_user = await User.findById(invitation.inviter_id).select('fcm_token');
+            if (inviter_user?.fcm_token) {
+                await sendPushNotification(
+                    [inviter_user.fcm_token],
+                    'Invitation Accepted! 🎉',
+                    invite_msg,
+                    {
+                        type: 'invitation_accepted',
+                        group_id: invitation.group_id._id.toString(),
+                        group_name: invitation.group_id.group_name
+                    }
+                );
+            }
+        } catch (push_err) {
+            logger.warn(`FCM push to inviter failed (non-fatal): ${push_err.message}`);
+        }
 
         logger.info(`Invitation accepted: ${invitation._id} by ${user_id}`);
 

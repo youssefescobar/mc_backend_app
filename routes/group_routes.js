@@ -32,7 +32,7 @@ router.put('/:group_id', moderatorAuth, group_controller.update_group_details);
 router.delete('/:group_id', moderatorAuth, group_controller.delete_group);
 router.get('/:group_id/qr', moderatorAuth, group_controller.generate_group_qr);
 router.post('/join', group_controller.join_group);
-// router.delete('/:group_id/moderators/:user_id', moderatorAuth, group_controller.remove_moderator);
+router.delete('/:group_id/moderators/:user_id', moderatorAuth, group_controller.remove_moderator);
 router.post('/:group_id/leave', moderatorAuth, group_controller.leave_group);
 
 // Suggested Areas
