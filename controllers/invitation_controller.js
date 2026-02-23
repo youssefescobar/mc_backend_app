@@ -114,9 +114,9 @@ const accept_invitation = async (req, res) => {
         // Optimize: Use role to determine which collection to query
         let account;
         if (req.user.role === 'pilgrim') {
-            account = await Pilgrim.findById(user_id).select('email');
+            account = await Pilgrim.findById(user_id).select('email full_name');
         } else {
-            account = await User.findById(user_id).select('email');
+            account = await User.findById(user_id).select('email full_name');
         }
 
         const user_email = account?.email ? account.email.toLowerCase() : null;
@@ -194,9 +194,9 @@ const decline_invitation = async (req, res) => {
 
         let account;
         if (req.user.role === 'pilgrim') {
-            account = await Pilgrim.findById(user_id).select('email');
+            account = await Pilgrim.findById(user_id).select('email full_name');
         } else {
-            account = await User.findById(user_id).select('email');
+            account = await User.findById(user_id).select('email full_name');
         }
 
         const user_email = account?.email ? account.email.toLowerCase() : null;

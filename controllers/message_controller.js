@@ -243,6 +243,21 @@ exports.delete_message = async (req, res) => {
             return res.status(403).json({ message: "Not authorized to delete this message" });
         }
 
+        // --- Delete Media File ---
+        if (message.media_url) {
+            const fs = require('fs');
+            const path = require('path');
+            const filePath = path.join(__dirname, '..', 'uploads', message.media_url);
+            try {
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                    logger.info(`Deleted media file: ${filePath}`);
+                }
+            } catch (err) {
+                logger.error(`Error deleting media file ${filePath}: ${err.message}`);
+            }
+        }
+
         await Message.findByIdAndDelete(message_id);
 
         res.json({

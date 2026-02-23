@@ -496,12 +496,16 @@ exports.leave_group = async (req, res) => {
             $pull: { moderator_ids: req.user.id }
         });
 
+        // Get the leaving user's details for the notification
+        const leavingUser = await User.findById(req.user.id);
+        const leavingUserName = leavingUser ? leavingUser.full_name : 'A moderator';
+
         // Notify the creator
         await Notification.create({
             user_id: group.created_by,
             type: 'moderator_left',
             title: 'Moderator Left Group',
-            message: `${req.user.full_name} has left the group "${group.group_name}"`,
+            message: `${leavingUserName} has left the group "${group.group_name}"`,
             data: {
                 group_id: group._id,
                 group_name: group.group_name
