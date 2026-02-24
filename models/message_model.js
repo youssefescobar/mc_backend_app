@@ -50,6 +50,12 @@ const message_schema = new mongoose.Schema({
         type: Number, // In seconds
         default: 0
     },
+    meetpoint_data: {
+        area_id: { type: mongoose.Schema.Types.ObjectId, ref: 'SuggestedArea' },
+        name: String,
+        latitude: Number,
+        longitude: Number
+    },
     read_by: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Pilgrim'

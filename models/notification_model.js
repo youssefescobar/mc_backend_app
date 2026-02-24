@@ -16,7 +16,9 @@ const notification_schema = new mongoose.Schema({
             'moderator_left',
             'moderator_request_approved',
             'moderator_request_rejected',
-            'sos_alert'
+            'sos_alert',
+            'suggested_area',
+            'meetpoint'
         ],
         required: true
     },

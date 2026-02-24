@@ -21,6 +21,11 @@ const suggested_area_schema = new mongoose.Schema({
         trim: true,
         default: ''
     },
+    area_type: {
+        type: String,
+        enum: ['suggestion', 'meetpoint'],
+        default: 'suggestion'
+    },
     latitude: {
         type: Number,
         required: true
