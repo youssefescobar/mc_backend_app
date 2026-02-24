@@ -657,24 +657,29 @@ exports.add_suggested_area = async (req, res) => {
 
         // --- If meetpoint, also post it as an urgent message in the group chat ---
         if (type === 'meetpoint') {
-            const Message = require('../models/message_model');
-            const meetpointMsg = await Message.create({
-                group_id,
-                sender_id: req.user.id,
-                sender_model: 'User',
-                type: 'meetpoint',
-                content: description ? description.trim() : '',
-                is_urgent: true,
-                meetpoint_data: {
-                    area_id: area._id,
-                    name: name.trim(),
-                    latitude,
-                    longitude
+            try {
+                const Message = require('../models/message_model');
+                const meetpointMsg = await Message.create({
+                    group_id,
+                    sender_id: req.user.id,
+                    sender_model: 'User',
+                    type: 'meetpoint',
+                    content: description ? description.trim() : name.trim(),
+                    is_urgent: true,
+                    meetpoint_data: {
+                        area_id: area._id,
+                        name: name.trim(),
+                        latitude,
+                        longitude
+                    }
+                });
+                await meetpointMsg.populate('sender_id', 'full_name profile_picture role');
+                if (io) {
+                    io.to(`group_${group_id}`).emit('new_message', meetpointMsg);
                 }
-            });
-            await meetpointMsg.populate('sender_id', 'full_name profile_picture role');
-            if (io) {
-                io.to(`group_${group_id}`).emit('new_message', meetpointMsg);
+            } catch (msgErr) {
+                // Log but don't fail the whole request — area + notifications already done
+                logger.error(`Meetpoint chat message creation failed: ${msgErr.message}`);
             }
         }
 
