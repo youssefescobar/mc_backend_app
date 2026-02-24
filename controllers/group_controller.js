@@ -626,16 +626,14 @@ exports.add_suggested_area = async (req, res) => {
             ? `${moderatorName} set an urgent meetpoint. Navigate there now!`
             : `${moderatorName} suggested an area for you to visit.`;
 
-        // Get pilgrim user IDs (pilgrims are stored separately — look up their user_id)
+        // Get pilgrim IDs (pilgrims ARE the direct users — use _id for notification)
         const pilgrimDocs = await Pilgrim.find(
             { _id: { $in: group.pilgrim_ids } },
-            'user_id'
+            '_id'
         ).lean();
 
-        const notifications = pilgrimDocs
-            .filter(p => p.user_id)
-            .map(p => ({
-                user_id: p.user_id,
+        const notifications = pilgrimDocs.map(p => ({
+                user_id: p._id,
                 type: notifType,
                 title: notifTitle,
                 message: notifMessage,
@@ -652,9 +650,7 @@ exports.add_suggested_area = async (req, res) => {
             // Nudge each pilgrim's socket so their badge refreshes
             if (io) {
                 for (const p of pilgrimDocs) {
-                    if (p.user_id) {
-                        io.to(`user_${p.user_id}`).emit('notification_refresh');
-                    }
+                    io.to(`user_${p._id}`).emit('notification_refresh');
                 }
             }
         }
@@ -666,8 +662,8 @@ exports.add_suggested_area = async (req, res) => {
                 group_id,
                 sender_id: req.user.id,
                 sender_model: 'User',
-                type: 'text',
-                content: `📍 MEETPOINT: ${name.trim()}${description ? ' — ' + description.trim() : ''}\nLat: ${latitude}, Lng: ${longitude}`,
+                type: 'meetpoint',
+                content: description ? description.trim() : '',
                 is_urgent: true,
                 meetpoint_data: {
                     area_id: area._id,

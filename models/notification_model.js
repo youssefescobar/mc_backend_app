@@ -54,6 +54,10 @@ const notification_schema = new mongoose.Schema({
         location: {
             lat: Number,
             lng: Number
+        },
+        area_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'SuggestedArea'
         }
     },
     read: {
