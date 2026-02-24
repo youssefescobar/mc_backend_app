@@ -9,6 +9,8 @@ const initializeSockets = (io) => {
         socket.on('register-user', async ({ userId, role }) => {
             socket.data.userId = userId;
             socket.data.role = role || 'pilgrim';
+            // Join personal room for targeted server-to-client events
+            socket.join(`user_${userId}`);
             console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
 
             try {
