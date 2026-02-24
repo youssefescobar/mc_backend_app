@@ -28,7 +28,7 @@ const initializeSockets = (io) => {
         }
 
         // ── Group Rooms ────────────────────────────────────────────────────────
-        socket.on('join_group', (groupId) => {
+        socket.on('join_group', async (groupId) => {
             if (groupId) {
                 socket.join(`group_${groupId}`);
                 socket.data.groupId = groupId;
@@ -38,6 +38,23 @@ const initializeSockets = (io) => {
                         active: true,
                         last_active_at: new Date()
                     });
+                }
+                // Sync any currently-active nav beacons to the newly joined client
+                try {
+                    const roomSockets = await io.in(`group_${groupId}`).fetchSockets();
+                    for (const s of roomSockets) {
+                        if (s.id !== socket.id && s.data.navBeacon && s.data.navBeacon.groupId === groupId) {
+                            socket.emit('mod_nav_beacon', {
+                                moderatorId: s.data.navBeacon.moderatorId,
+                                moderatorName: s.data.navBeacon.moderatorName,
+                                enabled: true,
+                                lat: s.data.navBeacon.lat,
+                                lng: s.data.navBeacon.lng,
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.error('[Socket] Error syncing nav beacons on join:', err);
                 }
                 console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
             }
@@ -307,10 +324,56 @@ const initializeSockets = (io) => {
             }
         });
 
+        // ── Moderator Navigation Beacon ──────────────────────────────────────────
+        socket.on('mod_nav_beacon', (data) => {
+            const { groupId, enabled, lat, lng, moderatorId, moderatorName } = data;
+            if (!groupId) return;
+            // Ensure moderator is in the group room so they receive future events
+            socket.join(`group_${groupId}`);
+            socket.data.groupId = groupId;
+            // Store beacon state for auto-disable on disconnect
+            socket.data.navBeacon = enabled
+                ? { groupId, moderatorId: moderatorId || socket.data.userId, moderatorName: moderatorName || 'Moderator', lat, lng }
+                : null;
+            // Relay to all other members of the group
+            socket.to(`group_${groupId}`).emit('mod_nav_beacon', {
+                moderatorId: moderatorId || socket.data.userId,
+                moderatorName: moderatorName || 'Moderator',
+                enabled,
+                lat: enabled ? lat : null,
+                lng: enabled ? lng : null,
+            });
+            console.log(`[Socket] Nav beacon: ${moderatorId} group_${groupId} -> ${enabled}`);
+        });
+
+        // ── Pilgrim SOS Cancel ───────────────────────────────────────
+        socket.on('sos_cancel', (data) => {
+            const { groupId, pilgrimId } = data;
+            if (!groupId) return;
+            socket.to(`group_${groupId}`).emit('sos-alert-cancelled', {
+                pilgrim_id: pilgrimId || socket.data.userId,
+                group_id: groupId,
+                timestamp: new Date(),
+            });
+            console.log(`[Socket] SOS cancelled by ${pilgrimId} in group_${groupId}`);
+        });
+
         // ── Disconnect ────────────────────────────────────────────────────────
         socket.on('disconnect', async (reason) => {
-            const { userId, role, groupId } = socket.data;
+            const { userId, role, groupId, navBeacon } = socket.data;
             console.log(`[Socket] User disconnected: ${socket.id} (Reason: ${reason}, User: ${userId})`);
+
+            // Auto-disable nav beacon when moderator disconnects
+            if (navBeacon) {
+                socket.to(`group_${navBeacon.groupId}`).emit('mod_nav_beacon', {
+                    moderatorId: navBeacon.moderatorId,
+                    moderatorName: navBeacon.moderatorName,
+                    enabled: false,
+                    lat: null,
+                    lng: null,
+                });
+                console.log(`[Socket] Auto-disabled nav beacon for ${navBeacon.moderatorId}`);
+            }
 
             if (userId) {
                 try {
