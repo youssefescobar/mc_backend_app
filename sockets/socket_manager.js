@@ -76,7 +76,7 @@ const initializeSockets = (io) => {
 
         // ── WebRTC Call Signaling ──────────────────────────────────────────────
 
-        socket.on('call-offer', async ({ to, offer }) => {
+        socket.on('call-offer', async ({ to, channelName }) => {
             console.log(`[Socket] Call offer from ${socket.data.userId} to ${to}`);
 
             const { sendPushNotification } = require('../services/pushNotificationService');
@@ -121,7 +121,7 @@ const initializeSockets = (io) => {
                     // If the app is backgrounded, CallContext will show its own Notifee notification.
                     // We do NOT also send FCM to avoid the double-UI race condition.
                     console.log(`[Socket] Recipient ${to} has active socket — sending call-offer via socket ONLY`);
-                    targetSocket.emit('call-offer', { offer, from: socket.data.userId, callerInfo });
+                    targetSocket.emit('call-offer', { channelName, from: socket.data.userId, callerInfo });
                 } else {
                     // ── Recipient has no socket (killed/offline) ─────────────────
                     // Send FCM only. The BackgroundNotificationTask + Notifee will show the call UI.
@@ -137,7 +137,7 @@ const initializeSockets = (io) => {
                                 callerId: socket.data.userId,
                                 callerName: callerInfo.name,
                                 callerRole: callerInfo.role,
-                                offer: JSON.stringify(offer)
+                                channelName
                             },
                             true // high priority
                         );
@@ -152,16 +152,16 @@ const initializeSockets = (io) => {
                 // Fallback: try to deliver via socket if possible
                 const targetSocket = getSocketByUserId(to);
                 if (targetSocket) {
-                    targetSocket.emit('call-offer', { offer, from: socket.data.userId });
+                    targetSocket.emit('call-offer', { channelName, from: socket.data.userId });
                 }
             }
         });
 
-        socket.on('call-answer', async ({ to, answer }) => {
+        socket.on('call-answer', async ({ to }) => {
             console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
             const target = getSocketByUserId(to);
             if (target) {
-                target.emit('call-answer', { answer, from: socket.data.userId });
+                target.emit('call-answer', { from: socket.data.userId });
 
                 // Update call record to in-progress
                 try {
