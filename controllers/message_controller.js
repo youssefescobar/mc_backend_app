@@ -260,6 +260,15 @@ exports.delete_message = async (req, res) => {
 
         await Message.findByIdAndDelete(message_id);
 
+        // Broadcast deletion to all group members in real-time
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`group_${message.group_id}`).emit('message_deleted', {
+                message_id,
+                group_id: message.group_id,
+            });
+        }
+
         res.json({
             success: true,
             message: "Message deleted successfully"

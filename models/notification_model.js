@@ -16,7 +16,9 @@ const notification_schema = new mongoose.Schema({
             'moderator_left',
             'moderator_request_approved',
             'moderator_request_rejected',
-            'sos_alert'
+            'sos_alert',
+            'suggested_area',
+            'meetpoint'
         ],
         required: true
     },
@@ -52,6 +54,10 @@ const notification_schema = new mongoose.Schema({
         location: {
             lat: Number,
             lng: Number
+        },
+        area_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'SuggestedArea'
         }
     },
     read: {

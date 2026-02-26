@@ -23,7 +23,7 @@ const message_schema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['text', 'voice', 'image', 'tts'],
+        enum: ['text', 'voice', 'image', 'tts', 'meetpoint'],
         default: 'text'
     },
     content: {
@@ -49,6 +49,12 @@ const message_schema = new mongoose.Schema({
     duration: {
         type: Number, // In seconds
         default: 0
+    },
+    meetpoint_data: {
+        area_id: { type: mongoose.Schema.Types.ObjectId, ref: 'SuggestedArea' },
+        name: String,
+        latitude: Number,
+        longitude: Number
     },
     read_by: [{
         type: mongoose.Schema.Types.ObjectId,

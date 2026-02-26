@@ -577,7 +577,8 @@ exports.update_group_details = async (req, res) => {
 exports.add_suggested_area = async (req, res) => {
     try {
         const { group_id } = req.params;
-        const { name, description, latitude, longitude } = req.body;
+        const { name, description, latitude, longitude, area_type } = req.body;
+        const type = area_type || 'suggestion';
 
         if (!name || latitude === undefined || longitude === undefined) {
             return res.status(400).json({ message: "Name, latitude, and longitude are required" });
@@ -593,14 +594,98 @@ exports.add_suggested_area = async (req, res) => {
             return res.status(403).json({ message: "Not authorized" });
         }
 
+        // Meetpoint constraint: only one active meetpoint per group
+        if (type === 'meetpoint') {
+            const existing = await SuggestedArea.findOne({ group_id, area_type: 'meetpoint', active: true });
+            if (existing) {
+                return res.status(409).json({ message: "A meetpoint already exists. Delete the current one before adding a new one." });
+            }
+        }
+
         const area = await SuggestedArea.create({
             group_id,
             created_by: req.user.id,
             name: name.trim(),
             description: (description || '').trim(),
+            area_type: type,
             latitude,
             longitude
         });
+
+        await area.populate('created_by', 'full_name');
+
+        // --- Socket.io real-time broadcast ---
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`group_${group_id}`).emit('area_added', area);
+        }
+
+        // --- Create notifications for all pilgrims in the group ---
+        const moderatorName = req.user.full_name || 'Moderator';
+        const notifType = type === 'meetpoint' ? 'meetpoint' : 'suggested_area';
+        const notifTitle = type === 'meetpoint'
+            ? `Urgent Meetpoint: ${name.trim()}`
+            : `Suggested Area: ${name.trim()}`;
+        const notifMessage = type === 'meetpoint'
+            ? `${moderatorName} set an urgent meetpoint. Navigate there now!`
+            : `${moderatorName} suggested an area for you to visit.`;
+
+        // Get pilgrim IDs (pilgrims ARE the direct users — use _id for notification)
+        const pilgrimDocs = await Pilgrim.find(
+            { _id: { $in: group.pilgrim_ids } },
+            '_id'
+        ).lean();
+
+        const notifications = pilgrimDocs.map(p => ({
+                user_id: p._id,
+                type: notifType,
+                title: notifTitle,
+                message: notifMessage,
+                data: {
+                    group_id,
+                    group_name: group.group_name,
+                    area_id: area._id,
+                    location: { lat: latitude, lng: longitude }
+                }
+            }));
+
+        if (notifications.length > 0) {
+            await Notification.insertMany(notifications);
+            // Nudge each pilgrim's socket so their badge refreshes
+            if (io) {
+                for (const p of pilgrimDocs) {
+                    io.to(`user_${p._id}`).emit('notification_refresh');
+                }
+            }
+        }
+
+        // --- If meetpoint, also post it as an urgent message in the group chat ---
+        if (type === 'meetpoint') {
+            try {
+                const Message = require('../models/message_model');
+                const meetpointMsg = await Message.create({
+                    group_id,
+                    sender_id: req.user.id,
+                    sender_model: 'User',
+                    type: 'meetpoint',
+                    content: description ? description.trim() : name.trim(),
+                    is_urgent: true,
+                    meetpoint_data: {
+                        area_id: area._id,
+                        name: name.trim(),
+                        latitude,
+                        longitude
+                    }
+                });
+                await meetpointMsg.populate('sender_id', 'full_name profile_picture role');
+                if (io) {
+                    io.to(`group_${group_id}`).emit('new_message', meetpointMsg);
+                }
+            } catch (msgErr) {
+                // Log but don't fail the whole request — area + notifications already done
+                logger.error(`Meetpoint chat message creation failed: ${msgErr.message}`);
+            }
+        }
 
         res.status(201).json({ success: true, area });
     } catch (error) {
@@ -654,6 +739,16 @@ exports.delete_suggested_area = async (req, res) => {
 
         if (!area) {
             return res.status(404).json({ message: "Suggested area not found" });
+        }
+
+        // --- Socket.io real-time broadcast ---
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`group_${group_id}`).emit('area_deleted', {
+                area_id,
+                group_id,
+                area_type: area.area_type
+            });
         }
 
         res.json({ success: true, message: "Suggested area removed" });
