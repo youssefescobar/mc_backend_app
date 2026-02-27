@@ -131,16 +131,17 @@ const initializeSockets = (io) => {
                 socket.data.currentCallId = callRecord._id;
                 console.log(`[Socket] Call record created: ${callRecord._id}`);
 
-                // Check if recipient is reachable via socket
-                const targetSocket = getSocketByUserId(to);
+                // Check if recipient is reachable via socket.
+                // Use the personal room ('user_<id>') rather than a raw scan —
+                // the room is joined synchronously in 'register-user' and is
+                // more reliable than scanning socket.data fields.
+                const recipientSockets = await io.in(`user_${to}`).fetchSockets();
+                const isOnline = recipientSockets.length > 0;
 
-                if (targetSocket) {
+                if (isOnline) {
                     // ── Recipient has active socket ──────────────────────────────
-                    // Send via socket ONLY. The app's CallContext handles the call UI.
-                    // If the app is backgrounded, CallContext will show its own Notifee notification.
-                    // We do NOT also send FCM to avoid the double-UI race condition.
-                    console.log(`[Socket] Recipient ${to} has active socket — sending call-offer via socket ONLY`);
-                    targetSocket.emit('call-offer', { channelName, from: socket.data.userId, callerInfo });
+                    console.log(`[Socket] Recipient ${to} is in room user_${to} — sending call-offer via socket`);
+                    io.to(`user_${to}`).emit('call-offer', { channelName, from: socket.data.userId, callerInfo });
                 } else {
                     // ── Recipient has no socket (killed/offline) ─────────────────
                     // Send FCM only. The BackgroundNotificationTask + Notifee will show the call UI.
@@ -168,11 +169,8 @@ const initializeSockets = (io) => {
 
             } catch (error) {
                 console.error('[Socket] Error in call-offer handler:', error);
-                // Fallback: try to deliver via socket if possible
-                const targetSocket = getSocketByUserId(to);
-                if (targetSocket) {
-                    targetSocket.emit('call-offer', { channelName, from: socket.data.userId });
-                }
+                // Fallback: try to deliver via socket room if possible
+                io.to(`user_${to}`).emit('call-offer', { channelName, from: socket.data.userId });
             }
         });
 
