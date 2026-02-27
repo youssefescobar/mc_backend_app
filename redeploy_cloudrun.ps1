@@ -9,6 +9,13 @@ $envFile   = Join-Path $PSScriptRoot ".env"
 $yamlFile  = Join-Path $PSScriptRoot "_cloudrun_env.yaml"
 $serviceUrl = "https://mcbackendapp-199324116788.europe-west8.run.app"
 
+# ── Ensure gcloud is on the PATH ─────────────────────────────────────────────
+$gcloudBin = "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin"
+if (Test-Path "$gcloudBin\gcloud.cmd") {
+    $env:PATH = "$gcloudBin;$env:PATH"
+}
+$gcloud = "gcloud"
+
 # ── 1. Convert .env → YAML for --env-vars-file ─────────────────────────────
 $yamlLines = @()
 
