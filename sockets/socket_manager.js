@@ -169,8 +169,8 @@ const initializeSockets = (io) => {
 
             } catch (error) {
                 console.error('[Socket] Error in call-offer handler:', error);
-                // Fallback: try to deliver via socket room if possible
-                io.to(`user_${to}`).emit('call-offer', { channelName, from: socket.data.userId });
+                // Do NOT fallback with another emit — it could duplicate the call
+                // if the try block partially succeeded.
             }
         });
 
@@ -213,12 +213,65 @@ const initializeSockets = (io) => {
 
                 try {
                     const CallHistory = require('../models/call_history_model');
+                    const Notification = require('../models/notification_model');
+                    const { sendPushNotification } = require('../services/pushNotificationService');
+
                     if (target.data.currentCallId) {
+                        const callRecord = await CallHistory.findById(target.data.currentCallId);
+
                         await CallHistory.findByIdAndUpdate(target.data.currentCallId, {
                             status: 'declined',
                             ended_at: new Date()
                         });
                         console.log(`[Socket] Call record updated to declined`);
+
+                        // ── Create "missed call" notification for the RECEIVER ──
+                        // (the person who declined / timed-out still sees it as
+                        //  a missed call in their alerts, like a normal phone)
+                        if (callRecord) {
+                            const receiverId = socket.data.userId; // the one who declined
+                            // Fetch caller (moderator) name
+                            const callerId = target.data.userId;
+                            let caller = await User.findById(callerId).select('full_name');
+                            if (!caller) caller = await Pilgrim.findById(callerId).select('full_name');
+                            const callerName = caller?.full_name || 'Unknown';
+
+                            await Notification.create({
+                                user_id: receiverId,
+                                type: 'missed_call',
+                                title: 'Missed Call',
+                                message: `You missed a call from ${callerName}`,
+                                data: {
+                                    caller_id: callerId,
+                                    caller_name: callerName
+                                }
+                            });
+                            console.log(`[Socket] ✓ Missed call notification created for ${receiverId}`);
+
+                            // Real-time event so the app refreshes the badge
+                            const receiverSocket = getSocketByUserId(receiverId);
+                            if (receiverSocket) {
+                                receiverSocket.emit('missed-call-received', {
+                                    callId: callRecord._id.toString(),
+                                    callerId,
+                                    callerName
+                                });
+                            }
+
+                            // FCM push (standard, not full-screen)
+                            let receiver = await User.findById(receiverId).select('fcm_token full_name');
+                            if (!receiver) receiver = await Pilgrim.findById(receiverId).select('fcm_token full_name');
+                            if (receiver?.fcm_token) {
+                                await sendPushNotification(
+                                    [receiver.fcm_token],
+                                    'Missed Call',
+                                    `You missed a call from ${callerName}`,
+                                    { type: 'missed_call', callerId, callerName }
+                                );
+                                console.log(`[Socket] ✓ Missed call FCM sent to ${receiver.full_name}`);
+                            }
+                        }
+
                         delete target.data.currentCallId;
                     }
                 } catch (error) {
@@ -259,15 +312,30 @@ const initializeSockets = (io) => {
                         console.log(`[Socket] Call record updated: ${isMissed ? 'missed' : 'completed'}, duration: ${duration}s`);
 
                         if (isMissed) {
-                            // Emit real-time missed call event so recipient can update their badge
-                            const targetSocket = getSocketByUserId(targetUserId);
-
+                            // Fetch caller name first
                             let callerName = 'Someone';
                             if (socket.data.userId === callRecord.caller_id.toString()) {
                                 let me = await User.findById(socket.data.userId).select('full_name');
                                 if (!me) me = await Pilgrim.findById(socket.data.userId).select('full_name');
                                 callerName = me?.full_name || 'Unknown';
                             }
+
+                            // ── Create a persistent Notification doc for the recipient ──
+                            const Notification = require('../models/notification_model');
+                            await Notification.create({
+                                user_id: targetUserId,
+                                type: 'missed_call',
+                                title: 'Missed Call',
+                                message: `You missed a call from ${callerName}`,
+                                data: {
+                                    caller_id: socket.data.userId,
+                                    caller_name: callerName
+                                }
+                            });
+                            console.log(`[Socket] ✓ Missed call notification doc created for ${targetUserId}`);
+
+                            // Emit real-time missed call event so recipient can update their badge
+                            const targetSocket = getSocketByUserId(targetUserId);
 
                             if (targetSocket) {
                                 targetSocket.emit('missed-call-received', {
