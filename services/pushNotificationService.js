@@ -27,16 +27,19 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         // We can add APNS (iOS) config here if needed later
     };
 
-    if (isUrgentTTS || isIncomingCall) {
+    if (isUrgentTTS) {
         // DATA-ONLY: app JS runtime handles the full presentation via BackgroundNotificationTask.
         // - Urgent TTS   → plays sound + TTS sequence
-        // - Incoming Call → Notifee shows fullScreenIntent (handles both screen-on and screen-off)
-        //
-        // DO NOT add a notification block here for incoming_call.
-        // A notification block causes Android to show the FCM notification itself AND skip
-        // invoking the expo-notifications background task — breaking Notifee's call UI.
-        // High-priority data-only FCM DOES wake the Android process even when killed.
-        console.log(`[FCM] Sending data-only ${isIncomingCall ? 'incoming_call' : 'urgent TTS'} (background task will handle UI)`);
+        console.log(`[FCM] Sending data-only urgent TTS (background task will handle UI)`);
+    } else if (isIncomingCall) {
+        // ── INCOMING CALL: DATA-ONLY message ─────────────────────────────────
+        // CRITICAL: Must be data-only (no 'notification' block) so that the
+        // Flutter background handler ALWAYS fires — even when app is killed.
+        // The Flutter side uses flutter_callkit_incoming to show a native
+        // incoming-call screen (like WhatsApp / Messenger).
+        // If we include a 'notification' block, Android shows its own
+        // notification and the background handler may NOT run.
+        console.log('[FCM] Sending DATA-ONLY incoming call (flutter_callkit_incoming will show native call UI)');
     } else {
         // Standard Notification for everything else (messages, urgent text, etc.)
         message.notification = {
