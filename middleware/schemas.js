@@ -253,4 +253,7 @@ exports.verify_pilgrim_email_schema = Joi.object({
  * Moderator Request Validation
  */
 
+exports.request_moderator_schema = Joi.object({
+    // No body needed, uses authenticated pilgrim's verified email
+});
 
