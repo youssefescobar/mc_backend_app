@@ -10,8 +10,8 @@
 
 require('dotenv').config();
 const mongoose = require('mongoose');
-const { logger } = require('../config/logger');
-const connectDB = require('../config/db');
+const { logger } = require('./config/logger');
+const connectDB = require('./config/db');
 
 async function wipeDatabase() {
     try {

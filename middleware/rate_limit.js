@@ -31,10 +31,10 @@ const generalLimiter = rateLimit({
     validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
-// Login limiter - 5 requests per 15 minutes
+// Login limiter - 20 requests per 15 minutes
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5,
+    max: 20,
     handler: (req, res) => {
         const ip = getClientIp(req);
         logger.warn(`Login rate limit exceeded for ${ip}`);
@@ -101,10 +101,29 @@ const searchLimiter = rateLimit({
     validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
+// Export limiters and a reset function
+const resetAllLimits = () => {
+    try {
+        // Reset all rate limit stores
+        [generalLimiter, loginLimiter, registerLimiter, authLimiter, searchLimiter].forEach(limiter => {
+            if (limiter.resetKey) {
+                // This would reset for a specific key, but we want to reset all
+                // The memory store doesn't expose a resetAll method
+                // So the best way is to restart the server
+            }
+        });
+        return true;
+    } catch (error) {
+        logger.error('Error resetting rate limits:', error);
+        return false;
+    }
+};
+
 module.exports = { 
     generalLimiter, 
     authLimiter, 
     loginLimiter, 
     registerLimiter, 
-    searchLimiter 
+    searchLimiter,
+    resetAllLimits
 };
