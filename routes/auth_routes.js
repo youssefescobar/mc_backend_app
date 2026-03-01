@@ -13,15 +13,15 @@ const {
     update_language_schema,
     register_pilgrim_schema
 } = require('../middleware/schemas');
-const { authLimiter, searchLimiter } = require('../middleware/rate_limit');
+const { authLimiter, loginLimiter, registerLimiter, searchLimiter } = require('../middleware/rate_limit');
 const upload = require('../middleware/upload_middleware');
 
 // ==========================================
 // Public Routes
 // ==========================================
-router.post('/register', authLimiter, validate(register_schema), auth_ctrl.register_user);
-router.post('/register-invited-pilgrim', authLimiter, auth_ctrl.register_invited_pilgrim);
-router.post('/login', authLimiter, validate(login_schema), auth_ctrl.login_user);
+router.post('/register', registerLimiter, validate(register_schema), auth_ctrl.register_user);
+router.post('/register-invited-pilgrim', registerLimiter, auth_ctrl.register_invited_pilgrim);
+router.post('/login', loginLimiter, validate(login_schema), auth_ctrl.login_user);
 
 // ==========================================
 // Protected Routes (All Users)

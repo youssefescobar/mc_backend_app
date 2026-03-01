@@ -8,6 +8,100 @@ Complete API reference for the `mc_backend_app` backend.
 
 ---
 
+## Server Configuration
+
+### Security & Middleware
+- **Helmet**: Security headers enabled by default
+- **Compression**: Response compression for optimized bandwidth
+- **CORS**: Configurable via `CORS_ORIGINS` environment variable (comma-separated URLs), defaults to wildcard in development
+- **Request Limits**: 10MB limit for JSON and URL-encoded payloads
+- **Request Timeout**: 30 seconds per request
+- **Trust Proxy**: Enabled for proper IP detection behind reverse proxies/load balancers
+- **Rate Limiting**: 
+  - Multi-tier rate limiting system (see Rate Limiting section)
+  - Proxy-aware using Express trust proxy setting
+  - IPv6 compatible
+  - Logged violations with IP tracking
+  - Strictest limits on login (5/15min) and registration (10/hour)
+
+### Environment Variables
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Server port | `5000` |
+| `CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `*` |
+| `MONGO_URI` | MongoDB connection string | Required |
+| `JWT_SECRET` | JWT signing secret | Required |
+| `NODE_ENV` | Environment mode (`development`/`production`) | `development` |
+| `LOG_LEVEL` | Winston log level (error/warn/info/debug) | `info` |
+| `LOG_TO_FILE` | Enable file logging in development | `false` |
+| `FIREBASE_PROJECT_ID` | Firebase project ID | Required for push notifications |
+| `FIREBASE_CLIENT_EMAIL` | Firebase service account email | Required for push notifications |
+| `FIREBASE_PRIVATE_KEY` | Firebase service account private key | Required for push notifications |
+| `EMAIL_USER` | Gmail SMTP username | Required for email notifications |
+| `EMAIL_PASS` | Gmail App Password | Required for email notifications |
+
+### Database Configuration
+- **Connection Pool**: 2-10 connections
+- **Auto-reconnect**: Enabled with exponential backoff (up to 5 retries)
+- **Connection Timeout**: 5 seconds
+- **Socket Timeout**: 45 seconds
+- **Graceful Shutdown**: Database connections closed properly on server shutdown
+
+### Logging Configuration
+- **Development**: Colorized console output with human-readable format
+- **Production**: JSON-formatted logs for aggregators (ELK, Datadog, etc.)
+- **File Logging**: 
+  - Automatic in production
+  - Enabled in development via `LOG_TO_FILE=true`
+  - Daily rotation with 14-day retention for combined logs
+  - 30-day retention for error logs
+  - Max file size: 20MB per file
+- **Security**: Password, token, and sensitive fields are automatically redacted in logs
+- **HTTP Logging**: All requests logged with duration, status code, and sanitized request body on errors (truncated to 500 chars)
+- **Metadata**: All logs include environment, hostname, and process ID
+
+### Firebase Configuration
+- **Push Notifications**: Uses Firebase Cloud Messaging (FCM) for direct device-to-device push notifications
+- **Initialization**: Environment variable based (no service account JSON file needed)
+- **Safety Checks**: All Firebase operations validate initialization status before executing
+- **Authentication**: Supports Firebase Auth operations via `getAuth()` helper
+- **Messaging**: Supports multicast notifications via `getMessaging()` helper
+- **Error Handling**: Graceful fallback if Firebase credentials are missing (warnings logged, server continues)
+- **Priority Support**: High-priority notifications for urgent messages and incoming calls
+- **Data-Only Messages**: Supports silent/data-only notifications for background processing
+
+### Email Configuration
+- **Provider**: Gmail SMTP (port 465, SSL)
+- **Authentication**: Requires Gmail account with App Password (2FA must be enabled)
+- **Retry Logic**: Automatic retry with exponential backoff (up to 3 attempts)
+- **Timeouts**: Connection (10s), Greeting (5s), Socket (15s)
+- **Templates**: Reusable HTML email templates for consistent branding
+- **Validation**: Configuration checked on startup with detailed error logging
+- **Health Check**: `isEmailServiceReady()` helper to verify email service status
+- **Email Types**:
+  - Verification codes (6-digit, 10-minute expiry)
+  - Group moderator invitations (7-day expiry)
+  - Pilgrim group invitations (deep-link enabled for mobile app)
+
+### Authentication & Authorization
+- **JWT-based Authentication**: All protected routes require `Authorization: Bearer <token>` header
+- **Token Validation**: JWT tokens are verified with detailed error messages:
+  - `Token expired` - Token has passed its expiry time
+  - `Invalid token format` - Malformed or tampered token
+  - `Token not yet valid` - Token used before its "not before" time
+- **Role-based Authorization**: Supports role restrictions (admin, moderator, pilgrim)
+- **Security Monitoring**: 
+  - Failed authentication attempts tracked per IP address
+  - Security alerts logged after 10+ failed attempts from same IP
+  - Automatic cleanup of tracking data after 1 hour
+- **Startup Validation**: JWT_SECRET environment variable checked on startup (server exits if missing)
+- **Debug Logging**: Successful authentications logged only when `LOG_LEVEL=debug` to reduce log volume
+
+### Response Formats
+All API responses include a `success` boolean field. Successful responses return `success: true` with relevant data. Error responses return `success: false` with error details.
+
+---
+
 ## Error Handling
 
 All validation errors return HTTP 400 in this format:
@@ -19,6 +113,33 @@ All validation errors return HTTP 400 in this format:
   "errors": {
     "field_name": "Human-readable error message"
   }
+}
+```
+
+Route not found errors return HTTP 404:
+
+```json
+{
+  "success": false,
+  "message": "Cannot GET /api/invalid-route"
+}
+```
+
+Authentication errors return HTTP 401:
+
+```json
+{
+  "success": false,
+  "message": "Token expired"
+}
+```
+
+Authorization errors return HTTP 403:
+
+```json
+{
+  "success": false,
+  "message": "Access denied. Required role: admin or moderator"
 }
 ```
 
@@ -38,7 +159,7 @@ General server errors return HTTP 500:
 
 Registers a new pilgrim account. No email verification required.
 
-**Rate Limited**: Yes (`authLimiter`)
+**Rate Limited**: Yes (`registerLimiter` - 10 requests/hour)
 
 **Input** (JSON):
 ```json
@@ -72,7 +193,7 @@ Registers a new pilgrim account. No email verification required.
 
 Register via an invitation token (from email invite link).
 
-**Rate Limited**: Yes (`authLimiter`)
+**Rate Limited**: Yes (`registerLimiter` - 10 requests/hour)
 
 **Input** (JSON):
 ```json
@@ -98,6 +219,8 @@ Register via an invitation token (from email invite link).
 ---
 
 ### 1.3 Login — `POST /auth/login` (Public)
+
+**Rate Limited**: Yes (`loginLimiter` - 5 requests/15 minutes, skips successful logins)
 
 Login with email, national ID, or phone number. Works for all roles (pilgrim, moderator, admin).
 
@@ -1135,8 +1258,17 @@ Supported upload endpoints:
 
 ### Rate Limiting
 
-| Limiter | Applied To |
-|---------|-----------|
-| `authLimiter` | Login, Register endpoints |
-| `searchLimiter` | Pilgrim search endpoint |
-| `generalLimiter` | All group and pilgrim routes |
+All rate limiters include:
+- **Proxy Support**: Uses Express `trust proxy` setting to properly detect client IPs behind reverse proxies
+- **IPv6 Compatible**: Proper IPv6 address handling using built-in rate limiter key generation
+- **Standard Headers**: `RateLimit-*` headers in responses
+- **Logging**: Rate limit violations logged with client IP and endpoint
+- **Consistent Responses**: JSON format with `success: false`
+
+| Limiter | Window | Max Requests | Applied To | Notes |
+|---------|--------|--------------|------------|-------|
+| `loginLimiter` | 15 minutes | 5 | Login endpoint | Skips successful requests |
+| `registerLimiter` | 1 hour | 10 | Register endpoints | Prevents spam accounts |
+| `authLimiter` | 15 minutes | 20 | Other auth endpoints | Skips successful requests |
+| `searchLimiter` | 1 minute | 30 | Pilgrim search | Per-minute limit |
+| `generalLimiter` | 15 minutes | 200 | Most API routes | Skips health checks |

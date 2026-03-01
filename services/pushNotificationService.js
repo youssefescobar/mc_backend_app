@@ -1,4 +1,5 @@
-const admin = require('../config/firebase');
+const { getMessaging, isInitialized } = require('../config/firebase');
+const { logger } = require('../config/logger');
 
 /**
  * Send a multicast notification to multiple devices using Firebase Cloud Messaging (FCM).
@@ -6,6 +7,12 @@ const admin = require('../config/firebase');
  * This is preferred for "Urgent" background notifications on Android.
  */
 async function sendPushNotification(tokens, title, body, data = {}, isUrgent = false) {
+    // Check if Firebase is initialized
+    if (!isInitialized()) {
+        logger.error('Cannot send push notification: Firebase is not initialized');
+        throw new Error('Firebase Admin is not initialized');
+    }
+
     // Determine if we should use Data-Only (Silent) payload.
     // We ONLY want Data-Only for "Urgent TTS" messages so the app can control the "Sound -> TTS -> Sound" sequence.
     // For other urgent messages (Text, Voice Note) or normal messages, we want standard system notifications.
@@ -30,7 +37,7 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
     if (isUrgentTTS) {
         // DATA-ONLY: app JS runtime handles the full presentation via BackgroundNotificationTask.
         // - Urgent TTS   → plays sound + TTS sequence
-        console.log(`[FCM] Sending data-only urgent TTS (background task will handle UI)`);
+        logger.info('[FCM] Sending data-only urgent TTS (background task will handle UI)');
     } else if (isIncomingCall) {
         // ── INCOMING CALL: DATA-ONLY message ─────────────────────────────────
         // CRITICAL: Must be data-only (no 'notification' block) so that the
@@ -39,7 +46,7 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         // incoming-call screen (like WhatsApp / Messenger).
         // If we include a 'notification' block, Android shows its own
         // notification and the background handler may NOT run.
-        console.log('[FCM] Sending DATA-ONLY incoming call (flutter_callkit_incoming will show native call UI)');
+        logger.info('[FCM] Sending DATA-ONLY incoming call (flutter_callkit_incoming will show native call UI)');
     } else {
         // Standard Notification for everything else (messages, urgent text, etc.)
         message.notification = {
@@ -54,27 +61,28 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
             visibility: 'public',
         };
 
-        console.log('Sending Standard Notification:', JSON.stringify(message, null, 2));
+        logger.debug('Sending Standard Notification:', JSON.stringify(message, null, 2));
     }
 
     try {
-        const response = await admin.messaging().sendEachForMulticast(message);
-        console.log('FCM Notification sent:', response);
+        const messaging = getMessaging();
+        const response = await messaging.sendEachForMulticast(message);
+        logger.info(`FCM Notification sent: ${response.successCount}/${tokens.length} succeeded`);
 
         if (response.failureCount > 0) {
             const failedTokens = [];
             response.responses.forEach((resp, idx) => {
                 if (!resp.success) {
                     failedTokens.push(tokens[idx]);
-                    console.error(`Failure sending to token ${tokens[idx]}:`, resp.error);
+                    logger.error(`Failure sending to token ${tokens[idx]}: ${resp.error?.message}`);
                 }
             });
-            console.log('Failed tokens:', failedTokens);
+            logger.warn(`Failed tokens count: ${failedTokens.length}`);
         }
 
         return response;
     } catch (error) {
-        console.error('Error sending FCM notification:', error);
+        logger.error('Error sending FCM notification:', error);
         throw error;
     }
 }
