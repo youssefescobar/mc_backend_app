@@ -3,22 +3,26 @@ const router = express.Router();
 const { sendPushNotification } = require('../services/pushNotificationService');
 const { protect, authorize } = require('../middleware/auth_middleware');
 const { logger } = require('../config/logger');
+const { sendSuccess, sendError, sendServerError } = require('../utils/response_helpers');
 
 // Test route to send notification (Admin Only)
 router.post('/send', protect, authorize('admin'), async (req, res) => {
     const { tokens, title, body, data, isUrgent } = req.body;
 
-    if (!tokens || !Array.isArray(tokens)) {
-        return res.status(400).json({ error: 'tokens array is required' });
+    if (!tokens || !Array.isArray(tokens) || tokens.length === 0) {
+        return sendError(res, 400, 'Valid tokens array is required');
+    }
+
+    if (!title || !body) {
+        return sendError(res, 400, 'Title and body are required');
     }
 
     try {
         const result = await sendPushNotification(tokens, title, body, data, isUrgent);
-        logger.info(`Push notification sent successfully locally`);
-        res.json({ success: true, result });
+        logger.info(`Push notification sent to ${tokens.length} device(s)`);
+        sendSuccess(res, 200, 'Push notification sent successfully', { result });
     } catch (error) {
-        logger.error(`Failed to send push notification: ${error.message}`);
-        res.status(500).json({ error: 'Failed to send notification' });
+        sendServerError(res, logger, 'Failed to send push notification', error);
     }
 });
 

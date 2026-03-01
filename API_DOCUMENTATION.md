@@ -102,6 +102,62 @@ All API responses include a `success` boolean field. Successful responses return
 
 ---
 
+## Data Model Architecture
+
+### User Model Consolidation (v2.0)
+
+**Important Change**: The system now uses a single unified `User` model instead of separate `User` and `Pilgrim` models.
+
+**User Types**:
+- `user_type` enum: `'admin'`, `'moderator'`, `'pilgrim'`
+- All users (including pilgrims) are stored in the `users` collection
+- The `role` field in responses is a virtual property that maps to `user_type` for backward compatibility
+
+**Pilgrim-Specific Fields**:
+The unified User model includes optional fields that are primarily for pilgrims:
+- `national_id`: National ID number (unique, required for pilgrims)
+- `age`: Age in years (0-120)
+- `gender`: 'male', 'female', or 'other'
+- `medical_history`: Medical information (max 500 chars)
+- `language`: Preferred language (en, ar, ur, fr, id, tr)
+- `battery_percent`: Current device battery level
+- `email_verified`: Email verification status
+- `created_by`: User ID of the moderator who created this pilgrim
+
+**Location Tracking** (All Users):
+- `current_latitude`: GPS latitude (-90 to 90)
+- `current_longitude`: GPS longitude (-180 to 180)
+- `last_location_update`: Timestamp of last location update
+- `is_online`: Real-time online status (updated via WebSocket)
+- `last_active_at`: Last activity timestamp
+
+**Common Fields** (All Users):
+- `full_name`: User's full name
+- `email`: Email address (optional, unique if provided)
+- `phone_number`: Phone number (required, unique)
+- `password`: Hashed password (bcrypt)
+- `profile_picture`: Profile picture filename
+- `fcm_token`: Firebase Cloud Messaging token for push notifications
+- `active`: Account active status
+- `user_type`: User role/type (admin, moderator, pilgrim)
+
+**Model References**:
+All model relationships now reference the `User` model:
+- `Group.pilgrim_ids` → `[ObjectId ref: 'User']`
+- `Group.moderator_ids` → `[ObjectId ref: 'User']`
+- `Message.sender_id` → `ObjectId ref: 'User'`
+- `Message.recipient_id` → `ObjectId ref: 'User'`
+- `Notification.user_id` → `ObjectId ref: 'User'`
+- `CallHistory.caller_id` & `receiver_id` → `ObjectId ref: 'User'`
+- `CommunicationSession.initiator_id` → `ObjectId ref: 'User'`
+
+**Migration Notes**:
+- Old `role` field is maintained as a virtual property for backward compatibility
+- All enum fields that previously had `'Pilgrim'` now only use `'User'`
+- Client applications should transition to using `user_type` instead of `role`
+
+---
+
 ## Error Handling
 
 All validation errors return HTTP 400 in this format:
@@ -157,7 +213,7 @@ General server errors return HTTP 500:
 
 ### 1.1 Register Pilgrim — `POST /auth/register` (Public)
 
-Registers a new pilgrim account. No email verification required.
+Registers a new pilgrim account (creates a User with `user_type: 'pilgrim'`). No email verification required.
 
 **Rate Limited**: Yes (`registerLimiter` - 10 requests/hour)
 
@@ -167,7 +223,7 @@ Registers a new pilgrim account. No email verification required.
   "full_name": "Ahmed Ali",           // Required
   "national_id": "1234567890",        // Required, unique
   "phone_number": "+966501234567",    // Required, unique
-  "password": "securepassword123",    // Required, min 6 chars
+  "password": "securepassword123",    // Required, min 8 chars with complexity
   "email": "ahmed@example.com",       // Optional, unique if provided
   "medical_history": "Diabetes",      // Optional
   "age": 45,                          // Optional, 0-120
@@ -175,23 +231,23 @@ Registers a new pilgrim account. No email verification required.
 }
 ```
 
-**Output** (201):
+**Output** (200):
 ```json
 {
   "success": true,
   "message": "Registration successful. Welcome!",
   "token": "jwt_token",
-  "role": "pilgrim",
-  "user_id": "pilgrim_id",
+  "role": "pilgrim",                  // Virtual property, actual field is user_type
+  "user_id": "user_id",
   "full_name": "Ahmed Ali"
 }
 ```
 
----
+**Notes**:
+- Password must be 8+ characters with at least one uppercase, lowercase, and number
+- `role` in response is a virtual property that reflects `user_type`
 
-### 1.2 Register Invited Pilgrim — `POST /auth/register-invited-pilgrim` (Public)
-
-Register via an invitation token (from email invite link).
+--- Creates a User with `user_type: 'pilgrim'`.
 
 **Rate Limited**: Yes (`registerLimiter` - 10 requests/hour)
 
@@ -200,15 +256,19 @@ Register via an invitation token (from email invite link).
 {
   "token": "invitation_verification_token",
   "full_name": "Jane User",
-  "password": "password123"
+  "password": "password123"          // Min 8 chars with complexity
 }
 ```
 
-**Output** (201):
+**Output** (200):
 ```json
 {
   "success": true,
   "message": "Registration successful",
+  "token": "jwt_token",
+  "role": "pilgrim",                 // Virtual property
+  "full_name": "Jane User",
+  "user_id": "useration successful",
   "token": "jwt_token",
   "role": "pilgrim",
   "full_name": "Jane User",
@@ -248,41 +308,74 @@ Login with email, national ID, or phone number. Works for all roles (pilgrim, mo
 
 ### 1.4 Get Profile — `GET /auth/me` (Protected)
 
-Returns the authenticated user's profile. Response varies by role.
+Returns the authenticated user's profile. Response varies by `user_type`.
 
 **Pilgrim Output** (200):
 ```json
 {
-  "_id": "...",
-  "full_name": "Ahmed Ali",
-  "email": "ahmed@example.com",
-  "national_id": "1234567890",
-  "phone_number": "+966501234567",
-  "medical_history": "Diabetes",
-  "age": 45,
-  "gender": "male",
-  "email_verified": true,
-  "role": "pilgrim",
-  "created_at": "2026-01-01T00:00:00.000Z",
-  "moderator_request_status": "none",
-  "pending_moderator_request": null
+  "success": true,
+  "message": null,
+  "data": {
+    "_id": "...",
+    "full_name": "Ahmed Ali",
+    "email": "ahmed@example.com",
+    "national_id": "1234567890",
+    "phone_number": "+966501234567",
+    "medical_history": "Diabetes",
+    "age": 45,
+    "gender": "male",
+    "language": "en",
+    "email_verified": true,
+    "user_type": "pilgrim",
+    "role": "pilgrim",                    // Virtual property
+    "current_latitude": 21.4225,
+    "current_longitude": 39.8262,
+    "battery_percent": 85,
+    "is_online": true,
+    "active": true,
+    "created_at": "2026-01-01T00:00:00.000Z",
+    "moderator_request_status": "none",   // 'none', 'pending', 'approved', 'rejected'
+    "pending_moderator_request": null
+  }
 }
 ```
 
 **Moderator/Admin Output** (200):
 ```json
 {
-  "_id": "...",
-  "full_name": "Mod Name",
-  "email": "mod@example.com",
-  "role": "moderator",
-  "phone_number": "+966...",
-  "profile_picture": "filename.jpg",
-  "created_at": "2026-01-01T00:00:00.000Z"
+  "success": true,
+  "message": null,
+  "data": {
+    "_id": "...",/admins.
+
+**Content-Type**: `multipart/form-data` (if uploading picture) or `application/json`
+
+**Input**:
+| Field | Type | Notes |
+|-------|------|-------|
+| `full_name` | string | Optional, min 3 chars, max 100 |
+| `phone_number` | string | Optional, must be unique |
+| `age` | number | Optional, 0-120 (pilgrims only) |
+| `gender` | string | Optional: male/female/other (pilgrims only) |
+| `medical_history` | string | Optional, max 500 chars (pilgrims only) |
+| `profile_picture` | file | Optional (moderators/admins only), jpg/png |
+
+**Output** (200):
+```json
+{
+  "success": true,
+  "message": "Profile updated successfully",
+  "data": {
+    "user": { /* updated user object with user_type field */ }
+  }
 }
 ```
 
----
+**Security**:
+- File uploads validated using magic numbers (not just extensions)
+- Allowed formats: JPG, PNG
+- Max file size: 10MB
+- Files sanitized and renamed cryptographically
 
 ### 1.5 Update Profile — `PUT /auth/update-profile` (Protected)
 
@@ -1125,11 +1218,19 @@ Delete a specific notification.
 
 ## 7. Communication Sessions (`/communication`)
 
-*All routes require authentication.*
+*All routes require authentication and include input validation.*
+
+**Security Enhancements (v2.0)**:
+- All endpoints now include Joi validation for request bodies
+- Group membership verification on all operations
+- Enhanced authorization checks (initiator, moderator, or admin can end sessions)
+- Session status validation before operations
 
 ### 7.1 Start Session — `POST /communication/start-session`
 
 Start a communication session (call or walkie-talkie) in a group.
+
+**Validation**: Requires `group_id` and valid `type`
 
 **Input** (JSON):
 ```json
@@ -1143,15 +1244,23 @@ Start a communication session (call or walkie-talkie) in a group.
 ```json
 {
   "success": true,
-  "message": "Session started",
-  "session_id": "...",
-  "data": { /* session object */ }
+  "message": "Session started successfully",
+  "data": {
+    "session_id": "...",
+    "session": { /* session object with initiator_model: 'User' */ }
+  }
 }
 ```
+
+**Authorization**: Must be a member of the group (pilgrim or moderator)
 
 ---
 
 ### 7.2 Join Session — `POST /communication/join-session`
+
+Join an active communication session.
+
+**Validation**: Requires `session_id`
 
 **Input** (JSON):
 ```json
@@ -1164,16 +1273,22 @@ Start a communication session (call or walkie-talkie) in a group.
 ```json
 {
   "success": true,
-  "message": "Joined session",
-  "session": { /* session object */ }
+  "message": "Joined session successfully",
+  "data": {
+    "session": { /* session object with participants array */ }
+  }
 }
 ```
+
+**Security**: Verifies group membership before allowing join
 
 ---
 
 ### 7.3 End Session — `POST /communication/end-session`
 
-End a session. Only the initiator or a moderator/admin can end it.
+End a communication session.
+
+**Validation**: Requires `session_id`
 
 **Input** (JSON):
 ```json
@@ -1181,6 +1296,16 @@ End a session. Only the initiator or a moderator/admin can end it.
   "session_id": "..."
 }
 ```
+
+**Output** (200):
+```json
+{
+  "success": true,
+  "message": "Session ended successfully"
+}
+```
+
+**Authorization**: Only the session initiator, group moderators, or admin can end a session
 
 **Output** (200):
 ```json
@@ -1236,13 +1361,17 @@ Returns all active communication sessions for a group.
 | `image` | Image message | `file` (image) |
 | `tts` | Text-to-speech | `content`, `original_text` |
 
-### User Roles
+### User Roles (User Types)
 
-| Role | Description |
-|------|-------------|
-| `pilgrim` | Basic user, stored in Pilgrim collection |
-| `moderator` | Group manager, stored in User collection |
-| `admin` | System administrator, stored in User collection |
+**Updated in v2.0**: All users are now stored in the unified `User` collection with a `user_type` field.
+
+| User Type | Description | Collection |
+|-----------|-------------|------------|
+| `pilgrim` | Basic user (travelers, pilgrims) | `users` (user_type: 'pilgrim') |
+| `moderator` | Group manager, can create groups and manage pilgrims | `users` (user_type: 'moderator') |
+| `admin` | System administrator, full access | `users` (user_type: 'admin') |
+
+**Note**: The `role` field in API responses is a virtual property that maps to `user_type` for backward compatibility.
 
 ### File Uploads
 
@@ -1272,3 +1401,119 @@ All rate limiters include:
 | `authLimiter` | 15 minutes | 20 | Other auth endpoints | Skips successful requests |
 | `searchLimiter` | 1 minute | 30 | Pilgrim search | Per-minute limit |
 | `generalLimiter` | 15 minutes | 200 | Most API routes | Skips health checks |
+
+---
+
+## Changelog
+
+### Version 2.0 (March 2026)
+
+#### Major Changes
+
+**User Model Consolidation**
+- ✅ Merged separate `User` and `Pilgrim` models into unified `User` model
+- ✅ Added `user_type` enum field: `'admin'`, `'moderator'`, `'pilgrim'`
+- ✅ `role` field now a virtual property mapping to `user_type` for backward compatibility
+- ✅ All user types stored in single `users` collection
+- ✅ Eliminated 70% code duplication between models
+
+**Model Reference Updates**
+- ✅ Updated all `ref: 'Pilgrim'` to `ref: 'User'` across all models
+- ✅ Updated enum fields: `sender_model`, `caller_model`, `receiver_model` now only use `'User'`
+- ✅ Consolidated indexes for better query performance
+
+**Controller Improvements**
+- ✅ **auth_controller.js**: Migrated all Pilgrim references to User with user_type filters
+- ✅ **profile_controller.js**: Complete rewrite - unified profile management for all user types
+- ✅ **communication_controller.js**: Added standardized responses, enhanced security, group membership verification
+- ✅ **message_controller.js**: Updated sender_model logic to always use 'User'
+- ✅ **group_controller.js**: Updated queries with user_type filters
+- ✅ **invitation_controller.js**: Unified user lookup logic
+- ✅ **call_history_controller.js**: Updated model references
+- ✅ **pilgrim_controller.js**: Deleted - functionality moved to profile_controller
+
+**Route Enhancements**
+- ✅ **communication_routes.js**: Added Joi validation schemas for all endpoints
+- ✅ **push_notification_routes.js**: Added standardized response helpers
+- ✅ **pilgrim_routes.js**: Updated to use profile_controller
+- ✅ All routes now use consistent response format
+
+**Security Improvements**
+- ✅ **upload_middleware.js**: Enhanced file validation with magic number checking
+- ✅ **schemas.js**: Stronger password requirements (8+ chars, complexity)
+- ✅ Communication sessions now verify group membership before operations
+- ✅ Enhanced authorization checks across all protected endpoints
+- ✅ Sanitized error messages to prevent information leakage
+
+**Response Standardization**
+- ✅ Created `response_helpers.js` utility with `sendSuccess()`, `sendError()`, `sendServerError()`
+- ✅ All controllers updated to use standardized response format
+- ✅ Consistent error handling across all endpoints
+
+**Database Utilities**
+- ✅ Added `wipe_database.js` script for clean database resets in development
+- ✅ Removed duplicate index definitions to eliminate Mongoose warnings
+
+#### Breaking Changes
+
+⚠️ **Database Migration Required**
+- Old `pilgrims` collection must be migrated to `users` collection
+- All Pilgrim documents need `user_type: 'pilgrim'` field
+- Existing User documents need appropriate `user_type` field
+- See `MIGRATION_SUMMARY.md` for detailed migration guide
+
+⚠️ **API Response Changes**
+- All responses now include `success` boolean field
+- Error responses follow standardized format
+- Some endpoints changed from 201 to 200 status codes for consistency
+
+⚠️ **Field Name Changes**
+- Internal `role` field removed, replaced with `user_type`
+- `role` maintained as virtual property for backward compatibility
+- Client apps should transition to using `user_type`
+
+#### Deprecated
+
+- ❌ Separate Pilgrim model (merged into User model)
+- ❌ `pilgrim_controller.js` (functions moved to `profile_controller.js`)
+- ❌ Direct `role` field access (use `user_type` or virtual `role` property)
+
+#### Migration Path
+
+1. **Backup Current Database**
+   ```bash
+   mongodump --uri="mongodb://..." --out=backup/
+   ```
+
+2. **Update Code**
+   - Pull latest backend code
+   - Run `npm install` to update dependencies
+   - Verify environment variables
+
+3. **Run Database Migration**
+   - Review `MIGRATION_SUMMARY.md`
+   - Prepare migration script based on your data
+   - Test migration on staging environment first
+   - Execute migration on production with downtime window
+
+4. **Verify Migration**
+   - Check all user records have `user_type` field
+   - Verify model references updated
+   - Test authentication flows for all user types
+   - Verify group operations work correctly
+
+5. **Update Client Applications**
+   - Update API response parsing to handle new format
+   - Transition from `role` to `user_type` where applicable
+   - Test all critical user flows
+
+#### Notes
+
+- All changes maintain backward compatibility where possible
+- Virtual `role` property ensures existing client code continues to work
+- Comprehensive testing recommended before production deployment
+- See `MIGRATION_SUMMARY.md` for detailed technical documentation
+
+---
+
+**End of Documentation**

@@ -4,6 +4,7 @@ const SuggestedArea = require('../models/suggested_area_model');
 const Notification = require('../models/notification_model');
 const QRCode = require('qrcode');
 const { logger } = require('../config/logger');
+const { sendSuccess, sendError, sendServerError } = require('../utils/response_helpers');
 
 // Get a single group by ID (moderator/admin only)
 exports.get_single_group = async (req, res) => {
@@ -15,7 +16,7 @@ exports.get_single_group = async (req, res) => {
             .lean(); // Use lean for easier object manipulation
 
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         // Check if user is admin or a moderator of this group
@@ -23,7 +24,7 @@ exports.get_single_group = async (req, res) => {
         const is_group_moderator = group.moderator_ids.some(mod => mod._id.toString() === req.user.id);
 
         if (!is_admin && !is_group_moderator) {
-            return res.status(403).json({ message: "Not authorized to view this group" });
+            return sendError(res, 403, 'Not authorized to view this group');
         }
 
         // Enrich pilgrims with their details (Location now directly on User)
@@ -54,11 +55,10 @@ exports.get_single_group = async (req, res) => {
         // Remove __v from top-level group object
         delete group.__v;
 
-        res.status(200).json(group);
+        sendSuccess(res, 200, null, group);
 
     } catch (error) {
-        logger.error(`Error in get_single_group: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Get single group error', error);
     }
 };
 
@@ -74,7 +74,7 @@ exports.create_group = async (req, res) => {
         });
 
         if (existing) {
-            return res.status(400).json({ message: "You already have a group with this name" });
+            return sendError(res, 400, 'You already have a group with this name');
         }
 
         // Generate unique 6-character code
@@ -97,9 +97,9 @@ exports.create_group = async (req, res) => {
         const group_obj = new_group.toObject();
         delete group_obj.__v;
 
-        res.status(201).json(group_obj);
+        sendSuccess(res, 201, 'Group created successfully', group_obj);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Create group error', error);
     }
 };
 
@@ -110,7 +110,7 @@ exports.generate_group_qr = async (req, res) => {
 
         const group = await Group.findById(group_id);
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         // Check if user is admin or a moderator of this group
@@ -118,7 +118,7 @@ exports.generate_group_qr = async (req, res) => {
         const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
 
         if (!is_admin && !is_group_moderator) {
-            return res.status(403).json({ message: "Not authorized to access this group" });
+            return sendError(res, 403, 'Not authorized to access this group');
         }
 
         // Generate QR code as base64 data URL
@@ -129,14 +129,13 @@ exports.generate_group_qr = async (req, res) => {
             margin: 2
         });
 
-        res.json({
+        sendSuccess(res, 200, 'QR code generated successfully', {
             group_code: group.group_code,
             qr_code: qrCodeDataURL
         });
 
     } catch (error) {
-        logger.error(`Error generating QR code: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Generate QR code error', error);
     }
 };
 
@@ -146,17 +145,17 @@ exports.join_group = async (req, res) => {
         const { group_code } = req.body;
 
         if (!group_code) {
-            return res.status(400).json({ message: "Group code is required" });
+            return sendError(res, 400, 'Group code is required');
         }
 
         const group = await Group.findOne({ group_code });
         if (!group) {
-            return res.status(404).json({ message: "Invalid group code" });
+            return sendError(res, 404, 'Invalid group code');
         }
 
         // Only pilgrims can join groups via code
         if (req.user.user_type !== 'pilgrim') {
-            return res.status(403).json({ message: "Only pilgrims can join groups via code. Moderators must be invited." });
+            return sendError(res, 403, 'Only pilgrims can join groups via code. Moderators must be invited.');
         }
 
         // Check if already in group
@@ -164,16 +163,14 @@ exports.join_group = async (req, res) => {
             group.moderator_ids.some(id => id.toString() === req.user.id);
 
         if (is_member) {
-            return res.status(400).json({ message: "You are already a member of this group" });
+            return sendError(res, 400, 'You are already a member of this group');
         }
 
         // Add to pilgrim_ids
         group.pilgrim_ids.push(req.user.id);
         await group.save();
 
-        res.json({
-            success: true,
-            message: `Successfully joined group: ${group.group_name}`,
+        sendSuccess(res, 200, `Successfully joined group: ${group.group_name}`, {
             group: {
                 _id: group._id,
                 group_name: group.group_name,
@@ -182,7 +179,7 @@ exports.join_group = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Join group error', error);
     }
 };
 
@@ -196,7 +193,7 @@ exports.get_my_groups = async (req, res) => {
         const skip = (pageNum - 1) * limitNum;
 
         if (!req.user || !req.user.id) {
-            return res.status(401).json({ message: "User not authenticated" });
+            return sendError(res, 401, 'User not authenticated');
         }
 
         const query = { moderator_ids: req.user.id };
@@ -259,8 +256,7 @@ exports.get_my_groups = async (req, res) => {
             return group;
         });
 
-        res.json({
-            success: true,
+        sendSuccess(res, 200, null, {
             data: enriched_data,
             pagination: {
                 page: pageNum,
@@ -270,8 +266,7 @@ exports.get_my_groups = async (req, res) => {
             }
         });
     } catch (error) {
-        logger.error(`Error in get_my_groups: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Get my groups error', error);
     }
 };
 
@@ -283,18 +278,17 @@ exports.send_group_alert = async (req, res) => {
         // Validate group exists
         const group = await Group.findById(group_id);
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         // Logic for Option 3 hardware: This text would be pushed to the hardware SDK
         // For now, we return a success status
-        res.json({
-            status: "queued",
-            message: `Alert "${message_text}" sent to group ${group_id}`,
+        sendSuccess(res, 200, `Alert "${message_text}" sent to group ${group_id}`, {
+            status: 'queued',
             recipients: group.pilgrim_ids.length
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Send group alert error', error);
     }
 };
 
@@ -306,7 +300,7 @@ exports.send_individual_alert = async (req, res) => {
         // Validate pilgrim exists
         const pilgrim = await User.findById(user_id);
         if (!pilgrim) {
-            return res.status(404).json({ message: "Pilgrim not found" });
+            return sendError(res, 404, 'Pilgrim not found');
         }
 
         // Get the band assigned to this pilgrim
@@ -315,13 +309,11 @@ exports.send_individual_alert = async (req, res) => {
         // if (!band) ...
 
         // Logic for sending alert to specific wristband
-        res.json({
-            status: "queued",
-            message: `Alert "${message_text}" sent to pilgrim ${pilgrim.full_name}`
-            // band_serial: band.serial_number
+        sendSuccess(res, 200, `Alert "${message_text}" sent to pilgrim ${pilgrim.full_name}`, {
+            status: 'queued'
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Send individual alert error', error);
     }
 };
 
@@ -332,7 +324,7 @@ exports.add_pilgrim_to_group = async (req, res) => {
         const { identifier } = req.body;
 
         if (!identifier || identifier.trim() === '') {
-            return res.status(400).json({ message: "Email, phone number, or national ID is required." });
+            return sendError(res, 400, 'Email, phone number, or national ID is required');
         }
 
         const existing_pilgrim = await User.findOne({
@@ -345,7 +337,7 @@ exports.add_pilgrim_to_group = async (req, res) => {
         });
 
         if (!existing_pilgrim) {
-            return res.status(404).json({ message: "No registered pilgrim found with that email, phone number, or national ID." });
+            return sendError(res, 404, 'No registered pilgrim found with that email, phone number, or national ID');
         }
 
         const updated_group = await Group.findByIdAndUpdate(
@@ -355,12 +347,10 @@ exports.add_pilgrim_to_group = async (req, res) => {
         ).populate('pilgrim_ids', 'full_name email phone_number national_id age gender location battery_percent last_location_update');
 
         if (!updated_group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
-        return res.json({
-            message: "Pilgrim added to group",
-            success: true,
+        sendSuccess(res, 200, 'Pilgrim added to group', {
             group: {
                 _id: updated_group._id,
                 group_name: updated_group.group_name,
@@ -370,9 +360,9 @@ exports.add_pilgrim_to_group = async (req, res) => {
     } catch (error) {
         logger.error(`[Add Pilgrim Error]: ${error.message}`);
         if (error.code === 11000) {
-            return res.status(400).json({ message: "Pilgrim with this National ID or Phone Number already exists." });
+            return sendError(res, 400, 'Pilgrim with this National ID or Phone Number already exists');
         }
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Add pilgrim to group error', error);
     }
 };
 
@@ -388,10 +378,9 @@ exports.remove_pilgrim_from_group = async (req, res) => {
             { new: true }
         );
 
-        if (!updated_group) return res.status(404).json({ message: "Group not found" });
+        if (!updated_group) return sendError(res, 404, 'Group not found');
 
-        res.json({
-            message: "Pilgrim removed from group",
+        sendSuccess(res, 200, 'Pilgrim removed from group', {
             group: {
                 _id: updated_group._id,
                 group_name: updated_group.group_name,
@@ -399,7 +388,7 @@ exports.remove_pilgrim_from_group = async (req, res) => {
             }
         });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Remove pilgrim from group error', error);
     }
 };
 
@@ -410,19 +399,19 @@ exports.delete_group = async (req, res) => {
 
         // Verify the user is a moderator of this group
         const group = await Group.findById(group_id);
-        if (!group) return res.status(404).json({ message: "Group not found" });
+        if (!group) return sendError(res, 404, 'Group not found');
 
         const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
         if (!is_group_moderator) {
-            return res.status(403).json({ message: "Only group moderators can delete the group" });
+            return sendError(res, 403, 'Only group moderators can delete the group');
         }
 
         // Delete the group (pilgrims are automatically unassigned)
         await Group.findByIdAndDelete(group_id);
 
-        res.json({ message: "Group deleted successfully", group_id });
+        sendSuccess(res, 200, 'Group deleted successfully', { group_id });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Delete group error', error);
     }
 };
 
@@ -432,21 +421,21 @@ exports.remove_moderator = async (req, res) => {
         const { group_id, user_id } = req.params; // user_id of the moderator to remove
 
         const group = await Group.findById(group_id);
-        if (!group) return res.status(404).json({ message: "Group not found" });
+        if (!group) return sendError(res, 404, 'Group not found');
 
         // Only creator can remove moderators
         if (group.created_by.toString() !== req.user.id.toString()) {
-            return res.status(403).json({ message: "Only the group creator can remove moderators" });
+            return sendError(res, 403, 'Only the group creator can remove moderators');
         }
 
         // Cannot remove self
         if (user_id === req.user.id.toString()) {
-            return res.status(400).json({ message: "You cannot remove yourself. Use 'Delete Group' instead." });
+            return sendError(res, 400, 'You cannot remove yourself. Use "Delete Group" instead');
         }
 
         // Check if user is actually a moderator
         if (!group.moderator_ids.some(id => id.toString() === user_id)) {
-            return res.status(400).json({ message: "User is not a moderator of this group" });
+            return sendError(res, 400, 'User is not a moderator of this group');
         }
 
         // Remove from moderators list
@@ -466,10 +455,9 @@ exports.remove_moderator = async (req, res) => {
             }
         });
 
-        res.json({ message: "Moderator removed successfully" });
+        sendSuccess(res, 200, 'Moderator removed successfully');
     } catch (error) {
-        logger.error(`Error in remove_moderator: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Remove moderator error', error);
     }
 };
 
@@ -479,16 +467,16 @@ exports.leave_group = async (req, res) => {
         const { group_id } = req.params;
 
         const group = await Group.findById(group_id);
-        if (!group) return res.status(404).json({ message: "Group not found" });
+        if (!group) return sendError(res, 404, 'Group not found');
 
         // Creator cannot leave
         if (group.created_by.toString() === req.user.id.toString()) {
-            return res.status(400).json({ message: "Group creator cannot leave the group. You must delete the group." });
+            return sendError(res, 400, 'Group creator cannot leave the group. You must delete the group');
         }
 
         // Check if user is a moderator
         if (!group.moderator_ids.some(id => id.toString() === req.user.id.toString())) {
-            return res.status(400).json({ message: "You are not a moderator of this group" });
+            return sendError(res, 400, 'You are not a moderator of this group');
         }
 
         // Remove from moderators list
@@ -512,10 +500,9 @@ exports.leave_group = async (req, res) => {
             }
         });
 
-        res.json({ message: "You have left the group successfully" });
+        sendSuccess(res, 200, 'You have left the group successfully');
     } catch (error) {
-        logger.error(`Error in leave_group: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Leave group error', error);
     }
 };
 
@@ -527,14 +514,14 @@ exports.update_group_details = async (req, res) => {
 
         const group = await Group.findById(group_id);
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         const is_admin = req.user.role === 'admin';
         const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
 
         if (!is_admin && !is_group_moderator) {
-            return res.status(403).json({ message: "Not authorized to update this group" });
+            return sendError(res, 403, 'Not authorized to update this group');
         }
 
         // Check if new group name already exists for this moderator (only if moderator is updating)
@@ -545,7 +532,7 @@ exports.update_group_details = async (req, res) => {
                 _id: { $ne: group_id } // Exclude current group
             });
             if (existing_group_with_name) {
-                return res.status(400).json({ message: "You already have a group with this name" });
+                return sendError(res, 400, 'You already have a group with this name');
             }
         }
 
@@ -563,11 +550,10 @@ exports.update_group_details = async (req, res) => {
         delete updated_group.__v;
         // The docs show pilgrim_ids as an array of IDs in the PUT response, so no need to delete or populate details for it
 
-        res.status(200).json({ message: "Group updated successfully", group: updated_group });
+        sendSuccess(res, 200, 'Group updated successfully', { group: updated_group });
 
     } catch (error) {
-        logger.error(`Error in update_group_details: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Update group details error', error);
     }
 };
 
@@ -581,24 +567,24 @@ exports.add_suggested_area = async (req, res) => {
         const type = area_type || 'suggestion';
 
         if (!name || latitude === undefined || longitude === undefined) {
-            return res.status(400).json({ message: "Name, latitude, and longitude are required" });
+            return sendError(res, 400, 'Name, latitude, and longitude are required');
         }
 
         const group = await Group.findById(group_id);
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
         if (!is_group_moderator && req.user.role !== 'admin') {
-            return res.status(403).json({ message: "Not authorized" });
+            return sendError(res, 403, 'Not authorized');
         }
 
         // Meetpoint constraint: only one active meetpoint per group
         if (type === 'meetpoint') {
             const existing = await SuggestedArea.findOne({ group_id, area_type: 'meetpoint', active: true });
             if (existing) {
-                return res.status(409).json({ message: "A meetpoint already exists. Delete the current one before adding a new one." });
+                return sendError(res, 409, 'A meetpoint already exists. Delete the current one before adding a new one');
             }
         }
 
@@ -687,10 +673,9 @@ exports.add_suggested_area = async (req, res) => {
             }
         }
 
-        res.status(201).json({ success: true, area });
+        sendSuccess(res, 201, 'Suggested area added successfully', { area });
     } catch (error) {
-        logger.error(`Error in add_suggested_area: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Add suggested area error', error);
     }
 };
 
@@ -701,7 +686,7 @@ exports.get_suggested_areas = async (req, res) => {
 
         const group = await Group.findById(group_id);
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         const areas = await SuggestedArea.find({ group_id, active: true })
@@ -709,10 +694,9 @@ exports.get_suggested_areas = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        res.json({ success: true, areas });
+        sendSuccess(res, 200, null, { areas });
     } catch (error) {
-        logger.error(`Error in get_suggested_areas: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Get suggested areas error', error);
     }
 };
 
@@ -723,12 +707,12 @@ exports.delete_suggested_area = async (req, res) => {
 
         const group = await Group.findById(group_id);
         if (!group) {
-            return res.status(404).json({ message: "Group not found" });
+            return sendError(res, 404, 'Group not found');
         }
 
         const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
         if (!is_group_moderator && req.user.role !== 'admin') {
-            return res.status(403).json({ message: "Not authorized" });
+            return sendError(res, 403, 'Not authorized');
         }
 
         const area = await SuggestedArea.findOneAndUpdate(
@@ -738,7 +722,7 @@ exports.delete_suggested_area = async (req, res) => {
         );
 
         if (!area) {
-            return res.status(404).json({ message: "Suggested area not found" });
+            return sendError(res, 404, 'Suggested area not found');
         }
 
         // --- Socket.io real-time broadcast ---
@@ -751,9 +735,8 @@ exports.delete_suggested_area = async (req, res) => {
             });
         }
 
-        res.json({ success: true, message: "Suggested area removed" });
+        sendSuccess(res, 200, 'Suggested area removed');
     } catch (error) {
-        logger.error(`Error in delete_suggested_area: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        sendServerError(res, logger, 'Delete suggested area error', error);
     }
 };
