@@ -1,5 +1,4 @@
 const User = require('../models/user_model');
-const Pilgrim = require('../models/pilgrim_model');
 
 const initializeSockets = (io) => {
     io.on('connection', (socket) => {
@@ -14,11 +13,7 @@ const initializeSockets = (io) => {
             console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
 
             try {
-                if (socket.data.role === 'pilgrim') {
-                    await Pilgrim.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
-                } else {
-                    await User.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
-                }
+                await User.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
             } catch (err) {
                 console.error('[Socket] Error updating online status (connect):', err);
             }

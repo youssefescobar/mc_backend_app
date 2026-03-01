@@ -1,6 +1,5 @@
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
-const Pilgrim = require('../models/pilgrim_model');
 const SuggestedArea = require('../models/suggested_area_model');
 const Notification = require('../models/notification_model');
 const QRCode = require('qrcode');
@@ -27,11 +26,11 @@ exports.get_single_group = async (req, res) => {
             return res.status(403).json({ message: "Not authorized to view this group" });
         }
 
-        // Enrich pilgrims with their details (Location now directly on Pilgrim)
+        // Enrich pilgrims with their details (Location now directly on User)
         const pilgrim_ids = group.pilgrim_ids || [];
 
         // Optimize: Fetch all pilgrims in one query
-        const pilgrims = await Pilgrim.find({ _id: { $in: pilgrim_ids } })
+        const pilgrims = await User.find({ _id: { $in: pilgrim_ids }, user_type: 'pilgrim' })
             .select('full_name national_id email phone_number medical_history age gender current_latitude current_longitude last_location_update battery_percent active is_online last_active_at')
             .lean();
 
@@ -156,7 +155,7 @@ exports.join_group = async (req, res) => {
         }
 
         // Only pilgrims can join groups via code
-        if (req.user.role !== 'pilgrim') {
+        if (req.user.user_type !== 'pilgrim') {
             return res.status(403).json({ message: "Only pilgrims can join groups via code. Moderators must be invited." });
         }
 
@@ -220,7 +219,7 @@ exports.get_my_groups = async (req, res) => {
         // Fetch all pilgrims in one query if there are any
         let pilgrimsMap = {};
         if (allPilgrimIds.size > 0) {
-            const pilgrims = await Pilgrim.find({ _id: { $in: Array.from(allPilgrimIds) } })
+            const pilgrims = await User.find({ _id: { $in: Array.from(allPilgrimIds) }, user_type: 'pilgrim' })
                 .select('full_name email phone_number national_id medical_history age gender current_latitude current_longitude last_location_update battery_percent active is_online last_active_at')
                 .lean();
 
@@ -305,7 +304,7 @@ exports.send_individual_alert = async (req, res) => {
         const { user_id, message_text } = req.body;
 
         // Validate pilgrim exists
-        const pilgrim = await Pilgrim.findById(user_id);
+        const pilgrim = await User.findById(user_id);
         if (!pilgrim) {
             return res.status(404).json({ message: "Pilgrim not found" });
         }
@@ -336,7 +335,8 @@ exports.add_pilgrim_to_group = async (req, res) => {
             return res.status(400).json({ message: "Email, phone number, or national ID is required." });
         }
 
-        const existing_pilgrim = await Pilgrim.findOne({
+        const existing_pilgrim = await User.findOne({
+            user_type: 'pilgrim',
             $or: [
                 { email: identifier.trim().toLowerCase() },
                 { phone_number: identifier.trim() },
@@ -631,8 +631,8 @@ exports.add_suggested_area = async (req, res) => {
             : `${moderatorName} suggested an area for you to visit.`;
 
         // Get pilgrim IDs (pilgrims ARE the direct users — use _id for notification)
-        const pilgrimDocs = await Pilgrim.find(
-            { _id: { $in: group.pilgrim_ids } },
+        const pilgrimDocs = await User.find(
+            { _id: { $in: group.pilgrim_ids }, user_type: 'pilgrim' },
             '_id'
         ).lean();
 

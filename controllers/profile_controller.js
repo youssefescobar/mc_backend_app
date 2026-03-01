@@ -1,5 +1,4 @@
 const User = require('../models/user_model');
-const Pilgrim = require('../models/pilgrim_model');
 const PendingUser = require('../models/pending_user_model');
 const ModeratorRequest = require('../models/moderator_request_model');
 const { logger } = require('../config/logger');
@@ -11,48 +10,30 @@ const { sendSuccess, sendError, sendValidationError, sendServerError } = require
  */
 exports.get_profile = async (req, res) => {
     try {
-        if (req.user.role === 'pilgrim') {
-            const [pilgrim, latest_request] = await Promise.all([
-                Pilgrim.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified role created_at language'),
-                ModeratorRequest.findOne({ pilgrim_id: req.user.id }).sort({ requested_at: -1 }).select('status')
-            ]);
+        const user = await User.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language');
+        
+        if (!user) {
+            return sendError(res, 404, 'Profile not found');
+        }
 
-            if (!pilgrim) {
-                return sendError(res, 404, 'Profile not found');
-            }
-
+        // For pilgrims, include moderator request status
+        if (user.user_type === 'pilgrim') {
+            const latest_request = await ModeratorRequest.findOne({ pilgrim_id: req.user.id }).sort({ requested_at: -1 }).select('status');
             const moderator_request_status = latest_request?.status || null;
 
             return res.json({
-                ...pilgrim.toObject(),
+                ...user.toObject(),
+                role: user.user_type, // Backward compatibility
                 moderator_request_status,
                 pending_moderator_request: moderator_request_status === 'pending'
             });
-        } else {
-            const user = await User.findById(req.user.id).select('_id full_name email role phone_number created_at');
-
-            if (user) {
-                return res.json(user);
-            }
-
-            // Fallback: approved moderators may still exist in Pilgrim collection
-            const pilgrim = await Pilgrim.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified role created_at language');
-            
-            if (!pilgrim) {
-                return sendError(res, 404, 'Profile not found');
-            }
-
-            const pending_request = await ModeratorRequest.exists({
-                pilgrim_id: req.user.id,
-                status: 'pending'
-            });
-
-            return res.json({
-                ...pilgrim.toObject(),
-                moderator_request_status: null,
-                pending_moderator_request: Boolean(pending_request)
-            });
         }
+
+        // For moderators/admins
+        return res.json({
+            ...user.toObject(),
+            role: user.user_type // Backward compatibility
+        });
     } catch (error) {
         sendServerError(res, logger, 'Get profile error', error);
     }
@@ -65,47 +46,27 @@ exports.update_profile = async (req, res) => {
     try {
         const { full_name, phone_number, age, gender, medical_history, language } = req.body;
 
-        if (req.user.role === 'pilgrim') {
-            const updateData = {
-                ...(full_name && { full_name }),
-                ...(phone_number && { phone_number }),
-                ...(age !== undefined && { age: parseInt(age) }),
-                ...(gender && { gender }),
-                ...(medical_history !== undefined && { medical_history }),
-                ...(language && { language })
-            };
+        const updateData = {
+            ...(full_name && { full_name }),
+            ...(phone_number && { phone_number }),
+            ...(age !== undefined && { age: parseInt(age) }),
+            ...(gender && { gender }),
+            ...(medical_history !== undefined && { medical_history }),
+            ...(language && { language })
+        };
 
-            const updatedPilgrim = await Pilgrim.findByIdAndUpdate(
-                req.user.id,
-                updateData,
-                { new: true }
-            ).select('_id full_name email national_id phone_number medical_history age gender email_verified role created_at language');
+        const updatedUser = await User.findByIdAndUpdate(
+            req.user.id,
+            updateData,
+            { new: true, runValidators: true }
+        ).select('-password');
 
-            if (!updatedPilgrim) {
-                return sendError(res, 404, 'Profile not found');
-            }
-
-            logger.info(`Pilgrim profile updated: ${req.user.id}`);
-            return res.json({ message: "Profile updated successfully", user: updatedPilgrim });
-        } else {
-            const updateData = {
-                ...(full_name && { full_name }),
-                ...(phone_number && { phone_number })
-            };
-
-            const updatedUser = await User.findByIdAndUpdate(
-                req.user.id,
-                updateData,
-                { new: true }
-            ).select('_id full_name email role phone_number created_at');
-
-            if (!updatedUser) {
-                return sendError(res, 404, 'Profile not found');
-            }
-
-            logger.info(`User profile updated: ${req.user.id}`);
-            return res.json({ message: "Profile updated successfully", user: updatedUser });
+        if (!updatedUser) {
+            return sendError(res, 404, 'Profile not found');
         }
+
+        logger.info(`User profile updated: ${req.user.id}`);
+        sendSuccess(res, 200, 'Profile updated successfully', { user: updatedUser });
     } catch (error) {
         sendServerError(res, logger, 'Update profile error', error);
     }
@@ -118,11 +79,7 @@ exports.update_language = async (req, res) => {
     try {
         const { language } = req.body;
 
-        if (req.user.role === 'pilgrim') {
-            await Pilgrim.findByIdAndUpdate(req.user.id, { language }, { new: true });
-        } else {
-            await User.findByIdAndUpdate(req.user.id, { language }, { new: true });
-        }
+        await User.findByIdAndUpdate(req.user.id, { language }, { new: true, runValidators: true });
 
         logger.info(`User ${req.user.id} updated language to ${language}`);
         sendSuccess(res, 200, 'Language updated successfully');
@@ -136,25 +93,23 @@ exports.update_language = async (req, res) => {
  */
 exports.update_location = async (req, res) => {
     try {
-        const { latitude, longitude } = req.body;
+        const { latitude, longitude, battery } = req.body;
 
         if (latitude === undefined || longitude === undefined) {
             return sendError(res, 400, 'Latitude and longitude required');
         }
 
-        if (req.user.role === 'pilgrim') {
-            await Pilgrim.findByIdAndUpdate(req.user.id, {
-                current_latitude: latitude,
-                current_longitude: longitude,
-                last_location_update: new Date()
-            });
-        } else {
-            await User.findByIdAndUpdate(req.user.id, {
-                current_latitude: latitude,
-                current_longitude: longitude,
-                last_location_update: new Date()
-            });
+        const updateData = {
+            current_latitude: latitude,
+            current_longitude: longitude,
+            last_location_update: new Date()
+        };
+
+        if (battery !== undefined) {
+            updateData.battery_percent = battery;
         }
+
+        await User.findByIdAndUpdate(req.user.id, updateData);
 
         sendSuccess(res, 200, 'Location updated');
     } catch (error) {
@@ -173,11 +128,7 @@ exports.update_fcm_token = async (req, res) => {
             return sendError(res, 400, 'FCM Token is required');
         }
 
-        if (req.user.role === 'pilgrim') {
-            await Pilgrim.findByIdAndUpdate(req.user.id, { fcm_token });
-        } else {
-            await User.findByIdAndUpdate(req.user.id, { fcm_token });
-        }
+        await User.findByIdAndUpdate(req.user.id, { fcm_token });
 
         sendSuccess(res, 200, 'FCM Token updated');
     } catch (error) {
@@ -186,32 +137,29 @@ exports.update_fcm_token = async (req, res) => {
 };
 
 /**
- * Add or update email for pilgrim
+ * Add or update email for user
  */
 exports.add_email = async (req, res) => {
     try {
         const { email } = req.body;
-        const pilgrim_id = req.user.id;
+        const user_id = req.user.id;
 
         // Check if email is already in use
-        const [existing_pilgrim, existing_user] = await Promise.all([
-            Pilgrim.findOne({ email, _id: { $ne: pilgrim_id } }),
-            User.findOne({ email })
-        ]);
+        const existing_user = await User.findOne({ email, _id: { $ne: user_id } });
 
-        if (existing_pilgrim || existing_user) {
+        if (existing_user) {
             return sendValidationError(res, { 
                 email: 'This email is already registered with another account' 
             });
         }
 
-        // Update pilgrim email and set verified to false
-        await Pilgrim.findByIdAndUpdate(pilgrim_id, {
+        // Update user email and set verified to false
+        await User.findByIdAndUpdate(user_id, {
             email,
             email_verified: false
         });
 
-        logger.info(`Pilgrim added email: ${email} (${pilgrim_id})`);
+        logger.info(`User added email: ${email} (${user_id})`);
         sendSuccess(res, 200, 'Email added successfully. Please verify your email.');
     } catch (error) {
         sendServerError(res, logger, 'Add email error', error);
@@ -219,22 +167,22 @@ exports.add_email = async (req, res) => {
 };
 
 /**
- * Send email verification code to pilgrim
+ * Send email verification code
  */
 exports.send_email_verification = async (req, res) => {
     try {
-        const pilgrim_id = req.user.id;
+        const user_id = req.user.id;
 
-        const pilgrim = await Pilgrim.findById(pilgrim_id);
-        if (!pilgrim) {
-            return sendError(res, 404, 'Pilgrim not found');
+        const user = await User.findById(user_id);
+        if (!user) {
+            return sendError(res, 404, 'User not found');
         }
 
-        if (!pilgrim.email) {
+        if (!user.email) {
             return sendError(res, 400, 'No email address on file. Please add an email first.');
         }
 
-        if (pilgrim.email_verified) {
+        if (user.email_verified) {
             return sendError(res, 400, 'Email is already verified');
         }
 
@@ -243,20 +191,20 @@ exports.send_email_verification = async (req, res) => {
 
         // Store code in PendingUser temporarily
         await PendingUser.findOneAndUpdate(
-            { email: pilgrim.email },
+            { email: user.email },
             {
-                email: pilgrim.email,
+                email: user.email,
                 verification_code,
-                full_name: pilgrim.full_name,
-                password: pilgrim.password,
-                phone_number: pilgrim.phone_number
+                full_name: user.full_name,
+                password: user.password,
+                phone_number: user.phone_number
             },
             { upsert: true }
         );
 
         // Send verification email asynchronously
-        sendVerificationEmail(pilgrim.email, verification_code, pilgrim.full_name)
-            .then(() => logger.info(`Verification email sent to ${pilgrim.email}`))
+        sendVerificationEmail(user.email, verification_code, user.full_name)
+            .then(() => logger.info(`Verification email sent to ${user.email}`))
             .catch(err => logger.error(`Failed to send verification email: ${err.message}`));
 
         sendSuccess(res, 200, 'Verification code sent to your email');
@@ -266,24 +214,24 @@ exports.send_email_verification = async (req, res) => {
 };
 
 /**
- * Verify pilgrim email with code
+ * Verify user email with code
  */
 exports.verify_pilgrim_email = async (req, res) => {
     try {
         const { code } = req.body;
-        const pilgrim_id = req.user.id;
+        const user_id = req.user.id;
 
-        const pilgrim = await Pilgrim.findById(pilgrim_id);
-        if (!pilgrim) {
-            return sendError(res, 404, 'Pilgrim not found');
+        const user = await User.findById(user_id);
+        if (!user) {
+            return sendError(res, 404, 'User not found');
         }
 
-        if (!pilgrim.email) {
+        if (!user.email) {
             return sendError(res, 400, 'No email address on file');
         }
 
         // Check verification code
-        const pending = await PendingUser.findOne({ email: pilgrim.email });
+        const pending = await PendingUser.findOne({ email: user.email });
         if (!pending) {
             return sendError(res, 400, 'No verification code found. Please request a new one.');
         }
@@ -293,12 +241,12 @@ exports.verify_pilgrim_email = async (req, res) => {
         }
 
         // Mark email as verified
-        await Pilgrim.findByIdAndUpdate(pilgrim_id, { email_verified: true });
+        await User.findByIdAndUpdate(user_id, { email_verified: true });
 
         // Clean up pending record
-        await PendingUser.deleteOne({ email: pilgrim.email });
+        await PendingUser.deleteOne({ email: user.email });
 
-        logger.info(`Pilgrim email verified: ${pilgrim.email} (${pilgrim_id})`);
+        logger.info(`User email verified: ${user.email} (${user_id})`);
         sendSuccess(res, 200, 'Email verified successfully');
     } catch (error) {
         sendServerError(res, logger, 'Verify email error', error);
@@ -310,35 +258,35 @@ exports.verify_pilgrim_email = async (req, res) => {
  */
 exports.request_moderator = async (req, res) => {
     try {
-        const pilgrim_id = req.user.id;
+        const user_id = req.user.id;
 
-        const pilgrim = await Pilgrim.findById(pilgrim_id);
-        if (!pilgrim) {
-            return sendError(res, 404, 'Pilgrim not found');
+        const user = await User.findById(user_id);
+        if (!user) {
+            return sendError(res, 404, 'User not found');
+        }
+
+        // Check if user is a pilgrim
+        if (user.user_type !== 'pilgrim') {
+            return sendError(res, 400, 'Only pilgrims can request moderator status');
         }
 
         // Check if email exists
-        if (!pilgrim.email) {
+        if (!user.email) {
             return sendValidationError(res, { 
                 email: 'You must add an email address before requesting moderator status' 
             });
         }
 
         // Check if email is verified
-        if (!pilgrim.email_verified) {
+        if (!user.email_verified) {
             return sendValidationError(res, { 
                 email: 'You must verify your email address before requesting moderator status' 
             });
         }
 
-        // Check if already a moderator
-        if (pilgrim.role === 'moderator') {
-            return sendError(res, 400, 'You are already a moderator');
-        }
-
         // Check if there's already a pending request
         const existing_request = await ModeratorRequest.findOne({
-            pilgrim_id,
+            pilgrim_id: user_id,
             status: 'pending'
         });
 
@@ -347,11 +295,141 @@ exports.request_moderator = async (req, res) => {
         }
 
         // Create moderator request
-        await ModeratorRequest.create({ pilgrim_id });
+        await ModeratorRequest.create({ pilgrim_id: user_id });
 
-        logger.info(`Moderator request submitted: ${pilgrim_id}`);
+        logger.info(`Moderator request submitted: ${user_id}`);
         sendSuccess(res, 200, 'Moderator request submitted successfully. An admin will review your request.');
     } catch (error) {
         sendServerError(res, logger, 'Request moderator error', error);
+    }
+};
+
+/**
+ * Get pilgrim's assigned group
+ */
+exports.get_my_group = async (req, res) => {
+    try {
+        // Find group that contains this user (pilgrim)
+        const group = await Group.findOne({ pilgrim_ids: req.user.id })
+            .populate('created_by', 'full_name email phone_number current_latitude current_longitude')
+            .populate('moderator_ids', 'full_name email phone_number current_latitude current_longitude');
+
+        if (!group) {
+            return sendError(res, 404, 'You are not assigned to any group');
+        }
+
+        sendSuccess(res, 200, null, {
+            group_name: group.group_name,
+            group_id: group._id,
+            created_by: group.created_by,
+            moderators: group.moderator_ids,
+            pilgrim_count: group.pilgrim_ids?.length || 0,
+            allow_pilgrim_navigation: group.allow_pilgrim_navigation || false
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Get my group error', error);
+    }
+};
+
+/**
+ * Trigger SOS emergency alert
+ */
+exports.trigger_sos = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return sendError(res, 404, 'User not found');
+        }
+
+        // Find the group this user belongs to
+        const group = await Group.findOne({ pilgrim_ids: req.user.id })
+            .populate('moderator_ids', '_id full_name fcm_token');
+
+        if (!group) {
+            return sendError(res, 404, 'Not assigned to any group');
+        }
+
+        // Create notifications for all moderators in the group
+        const moderatorIdsSet = new Set(
+            [group.created_by?.toString(), ...group.moderator_ids.map(m => m._id?.toString())]
+                .filter(Boolean)
+        );
+        const moderatorIds = Array.from(moderatorIdsSet);
+
+        const notifications = moderatorIds.map(modId => ({
+            user_id: modId,
+            type: 'sos_alert',
+            title: 'Lost Pilgrim Alert',
+            message: `${user.full_name} reported they are lost and needs help.`,
+            data: {
+                pilgrim_id: user._id,
+                pilgrim_name: user.full_name,
+                pilgrim_phone: user.phone_number,
+                location: {
+                    lat: user.current_latitude,
+                    lng: user.current_longitude
+                },
+                group_id: group._id,
+                group_name: group.group_name
+            }
+        }));
+
+        await Notification.insertMany(notifications);
+
+        // Emit real-time SOS alert via Socket.io to group
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`group_${group._id}`).emit('sos-alert-received', {
+                pilgrim_id: user._id,
+                pilgrim_name: user.full_name,
+                pilgrim_phone: user.phone_number,
+                location: {
+                    lat: user.current_latitude,
+                    lng: user.current_longitude
+                },
+                group_id: group._id,
+                group_name: group.group_name,
+                timestamp: new Date()
+            });
+            console.log(`[API] SOS alert emitted to group ${group._id}`);
+        }
+
+        // Send push notifications to all moderators
+        const { sendPushNotification } = require('../services/pushNotificationService');
+        const moderatorTokens = group.moderator_ids
+            .filter(m => m.fcm_token)
+            .map(m => m.fcm_token);
+
+        if (group.created_by?.fcm_token && !moderatorTokens.includes(group.created_by.fcm_token)) {
+            moderatorTokens.push(group.created_by.fcm_token);
+        }
+
+        if (moderatorTokens.length > 0) {
+            await sendPushNotification(
+                moderatorTokens,
+                '🚨 SOS ALERT',
+                `${user.full_name} needs immediate help in ${group.group_name}`,
+                {
+                    type: 'sos_alert',
+                    pilgrim_id: user._id.toString(),
+                    pilgrim_name: user.full_name,
+                    pilgrim_phone: user.phone_number,
+                    lat: (user.current_latitude || 0).toString(),
+                    lng: (user.current_longitude || 0).toString(),
+                    group_id: group._id.toString(),
+                    group_name: group.group_name
+                },
+                true // is_urgent
+            );
+            console.log(`[API] SOS push notifications sent to ${moderatorTokens.length} moderators`);
+        }
+
+        logger.warn(`SOS Alert triggered by ${user.full_name} (${user._id}) in group ${group.group_name}`);
+
+        sendSuccess(res, 200, 'SOS alert sent to moderators', {
+            notified_count: moderatorIds.length
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'SOS trigger error', error);
     }
 };

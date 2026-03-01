@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 const User = require('../models/user_model');
-const Pilgrim = require('../models/pilgrim_model');
 const Invitation = require('../models/invitation_model');
 const Group = require('../models/group_model');
 const Notification = require('../models/notification_model');
@@ -29,8 +28,8 @@ const send_invitation = async (req, res) => {
 
         // Check if user exists (as moderator/admin or as pilgrim) in parallel
         const [invitee, invitee_pilgrim] = await Promise.all([
-            User.findOne({ email: email.toLowerCase() }),
-            Pilgrim.findOne({ email: email.toLowerCase() })
+            User.findOne({ email: email.toLowerCase(), user_type: { $in: ['moderator', 'admin'] } }),
+            User.findOne({ email: email.toLowerCase(), user_type: 'pilgrim' })
         ]);
 
         // Check if already a moderator
@@ -40,7 +39,7 @@ const send_invitation = async (req, res) => {
 
         // Check if pilgrim is already in the group
         if (invitee_pilgrim && group.pilgrim_ids.some(id => id.toString() === invitee_pilgrim._id.toString())) {
-            return res.status(400).json({ success: false, message: 'This pilgrim is already a member of this group' });
+            return res.status(400).json({ success: false, message: 'This user is already a member of this group' });
         }
 
         // Check for existing pending invitation
@@ -112,13 +111,8 @@ const accept_invitation = async (req, res) => {
         const { id } = req.params;
         const user_id = req.user.id;
 
-        // Optimize: Use role to determine which collection to query
-        let account;
-        if (req.user.role === 'pilgrim') {
-            account = await Pilgrim.findById(user_id).select('email full_name');
-        } else {
-            account = await User.findById(user_id).select('email full_name');
-        }
+        // Optimize: Use user_type to determine user type
+        const account = await User.findById(user_id).select('email full_name user_type');
 
         const user_email = account?.email ? account.email.toLowerCase() : null;
 
@@ -137,8 +131,8 @@ const accept_invitation = async (req, res) => {
             return res.status(400).json({ success: false, message: `Invitation is already ${invitation.status}` });
         }
 
-        // Determine if the user is a moderator or pilgrim and add accordingly based on role
-        if (req.user.role !== 'pilgrim') {
+        // Determine if the user is a moderator or pilgrim and add accordingly based on user_type
+        if (req.user.user_type !== 'pilgrim') {
             // User is a moderator/admin — add to moderator_ids
             await Group.findByIdAndUpdate(invitation.group_id._id, {
                 $addToSet: { moderator_ids: user_id }
@@ -215,12 +209,7 @@ const decline_invitation = async (req, res) => {
         const { id } = req.params;
         const user_id = req.user.id;
 
-        let account;
-        if (req.user.role === 'pilgrim') {
-            account = await Pilgrim.findById(user_id).select('email full_name');
-        } else {
-            account = await User.findById(user_id).select('email full_name');
-        }
+        const account = await User.findById(user_id).select('email full_name user_type');
 
         const user_email = account?.email ? account.email.toLowerCase() : null;
 
@@ -279,12 +268,7 @@ const get_my_invitations = async (req, res) => {
     try {
         const user_id = req.user.id;
 
-        let account;
-        if (req.user.role === 'pilgrim') {
-            account = await Pilgrim.findById(user_id).select('email');
-        } else {
-            account = await User.findById(user_id).select('email');
-        }
+        const account = await User.findById(user_id).select('email user_type');
 
         const user_email = account?.email ? account.email.toLowerCase() : null;
 

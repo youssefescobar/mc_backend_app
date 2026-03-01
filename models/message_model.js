@@ -8,7 +8,7 @@ const message_schema = new mongoose.Schema({
     },
     recipient_id: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Pilgrim',
+        ref: 'User',
         default: null
     },
     sender_id: {
@@ -19,7 +19,7 @@ const message_schema = new mongoose.Schema({
     sender_model: {
         type: String,
         required: true,
-        enum: ['User', 'Pilgrim']
+        enum: ['User']
     },
     type: {
         type: String,

@@ -9,7 +9,7 @@ const callHistorySchema = new mongoose.Schema({
     caller_model: {
         type: String,
         required: true,
-        enum: ['User', 'Pilgrim']
+        enum: ['User']
     },
     receiver_id: {
         type: mongoose.Schema.Types.ObjectId,
@@ -19,7 +19,7 @@ const callHistorySchema = new mongoose.Schema({
     receiver_model: {
         type: String,
         required: true,
-        enum: ['User', 'Pilgrim']
+        enum: ['User']
     },
     call_type: {
         type: String,

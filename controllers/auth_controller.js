@@ -1,6 +1,5 @@
 const User = require('../models/user_model');
 const PendingUser = require('../models/pending_user_model');
-const Pilgrim = require('../models/pilgrim_model');
 const Group = require('../models/group_model');
 const PendingPilgrim = require('../models/pending_pilgrim_model');
 const bcrypt = require('bcryptjs');
@@ -17,7 +16,7 @@ exports.register_user = async (req, res) => {
         const { full_name, national_id, phone_number, password, email, medical_history, age, gender, language } = req.body;
 
         // Check for existing user with same credentials
-        const existing_pilgrim = await Pilgrim.findOne({
+        const existing_user = await User.findOne({
             $or: [
                 { national_id },
                 { phone_number },
@@ -25,14 +24,14 @@ exports.register_user = async (req, res) => {
             ]
         });
 
-        if (existing_pilgrim) {
-            if (existing_pilgrim.national_id === national_id) {
+        if (existing_user) {
+            if (existing_user.national_id === national_id) {
                 return sendValidationError(res, { national_id: 'National ID is already registered' });
             }
-            if (existing_pilgrim.phone_number === phone_number) {
+            if (existing_user.phone_number === phone_number) {
                 return sendValidationError(res, { phone_number: 'Phone number is already registered' });
             }
-            if (email && existing_pilgrim.email === email.trim()) {
+            if (email && existing_user.email === email.trim()) {
                 return sendValidationError(res, { email: 'Email is already registered' });
             }
         }
@@ -40,7 +39,7 @@ exports.register_user = async (req, res) => {
         const hashed_password = await bcrypt.hash(password, 10);
 
         // Create Pilgrim account
-        const pilgrim = await Pilgrim.create({
+        const pilgrim = await User.create({
             full_name,
             national_id,
             phone_number,
@@ -50,7 +49,7 @@ exports.register_user = async (req, res) => {
             age,
             gender,
             language: language || 'en',
-            role: 'pilgrim'
+            user_type: 'pilgrim'
         });
 
         // Generate JWT token
@@ -149,24 +148,14 @@ exports.login_user = async (req, res) => {
     try {
         const { identifier, password } = req.body;
 
-        // Try to find user in Pilgrim and User collections in parallel
-        const [pilgrim, adminUser] = await Promise.all([
-            Pilgrim.findOne({
-                $or: [
-                    { email: identifier },
-                    { national_id: identifier },
-                    { phone_number: identifier }
-                ]
-            }),
-            User.findOne({
-                $or: [
-                    { email: identifier },
-                    { phone_number: identifier }
-                ]
-            })
-        ]);
-
-        let user = pilgrim || adminUser;
+        // Find user by identifier (email, national_id, or phone_number)
+        const user = await User.findOne({
+            $or: [
+                { email: identifier },
+                { national_id: identifier },
+                { phone_number: identifier }
+            ]
+        });
 
         if (!user) {
             return sendError(res, 401, 'Invalid credentials');
@@ -185,16 +174,16 @@ exports.login_user = async (req, res) => {
 
         // Generate token
         const token = jwt.sign(
-            { id: user._id, role: user.role },
+            { id: user._id, role: user.user_type },
             process.env.JWT_SECRET,
             { expiresIn: JWT_EXPIRATION }
         );
 
-        logger.info(`User logged in: ${user._id} (${user.role})`);
+        logger.info(`User logged in: ${user._id} (${user.user_type})`);
 
         res.json({
             token,
-            role: user.role,
+            role: user.user_type,
             user_id: user._id,
             full_name: user.full_name,
             language: user.language || 'en'
@@ -210,13 +199,8 @@ exports.login_user = async (req, res) => {
 exports.logout_user = async (req, res) => {
     try {
         const user_id = req.user.id;
-        const role = req.user.role;
 
-        if (role === 'pilgrim') {
-            await Pilgrim.findByIdAndUpdate(user_id, { fcm_token: null });
-        } else {
-            await User.findByIdAndUpdate(user_id, { fcm_token: null });
-        }
+        await User.findByIdAndUpdate(user_id, { fcm_token: null });
 
         logger.info(`User logged out: ${user_id}`);
         sendSuccess(res, 200, 'Logged out successfully');
@@ -244,22 +228,20 @@ exports.register_invited_pilgrim = async (req, res) => {
         }
 
         // Check if email already registered
-        const [existing_user, existing_pilgrim] = await Promise.all([
-            User.findOne({ email: pending_pilgrim.email }),
-            Pilgrim.findOne({ email: pending_pilgrim.email })
-        ]);
+        const existing_user = await User.findOne({ email: pending_pilgrim.email });
 
-        if (existing_user || existing_pilgrim) {
+        if (existing_user) {
             return sendError(res, 400, 'Email is already registered. Please login.');
         }
 
         // Create Pilgrim Account
         const hashed_password = await bcrypt.hash(password, 10);
 
-        const pilgrim = await Pilgrim.create({
+        const pilgrim = await User.create({
             full_name,
             email: pending_pilgrim.email,
             password: hashed_password,
+            user_type: 'pilgrim',
             created_by: pending_pilgrim.invited_by
         });
 
@@ -299,18 +281,18 @@ exports.register_pilgrim = async (req, res) => {
         const { full_name, national_id, medical_history, email, age, gender, phone_number, password } = req.body;
 
         // Check if pilgrim already exists
-        const existing_pilgrim = await Pilgrim.findOne({
+        const existing_user = await User.findOne({
             $or: [
                 { national_id },
                 ...(phone_number ? [{ phone_number }] : [])
             ]
         });
 
-        if (existing_pilgrim) {
-            if (existing_pilgrim.national_id === national_id) {
+        if (existing_user) {
+            if (existing_user.national_id === national_id) {
                 return sendValidationError(res, { national_id: 'Pilgrim with this ID already exists' });
             }
-            if (phone_number && existing_pilgrim.phone_number === phone_number) {
+            if (phone_number && existing_user.phone_number === phone_number) {
                 return sendValidationError(res, { phone_number: 'Phone number already registered' });
             }
         }
@@ -321,7 +303,7 @@ exports.register_pilgrim = async (req, res) => {
             hashed_password = await bcrypt.hash(password, 10);
         }
 
-        const pilgrim = await Pilgrim.create({
+        const pilgrim = await User.create({
             full_name,
             national_id,
             medical_history,
@@ -330,6 +312,7 @@ exports.register_pilgrim = async (req, res) => {
             age,
             gender,
             password: hashed_password,
+            user_type: 'pilgrim',
             created_by: req.user.id
         });
 
@@ -352,7 +335,8 @@ exports.search_pilgrims = async (req, res) => {
             return sendError(res, 400, 'Search query required');
         }
 
-        const pilgrims = await Pilgrim.find({
+        const pilgrims = await User.find({
+            user_type: 'pilgrim',
             $or: [
                 { full_name: { $regex: query, $options: 'i' } },
                 { national_id: { $regex: query, $options: 'i' } }
@@ -379,7 +363,7 @@ exports.get_pilgrim_by_id = async (req, res) => {
             query.created_by = req.user.id;
         }
 
-        const pilgrim = await Pilgrim.findOne(query)
+        const pilgrim = await User.findOne(query)
             .select('_id full_name national_id email phone_number medical_history age gender created_at')
             .lean();
 

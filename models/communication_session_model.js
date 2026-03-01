@@ -14,7 +14,7 @@ const communication_session_schema = new mongoose.Schema({
     initiator_model: {
         type: String,
         required: true,
-        enum: ['User', 'Pilgrim']
+        enum: ['User']
     },
     type: {
         type: String,
@@ -28,7 +28,7 @@ const communication_session_schema = new mongoose.Schema({
     },
     participants: [{
         user_id: { type: mongoose.Schema.Types.ObjectId, required: true, refPath: 'participants.user_model' },
-        user_model: { type: String, required: true, enum: ['User', 'Pilgrim'] },
+        user_model: { type: String, required: true, enum: ['User'] },
         joined_at: { type: Date, default: Date.now }
     }],
     started_at: {

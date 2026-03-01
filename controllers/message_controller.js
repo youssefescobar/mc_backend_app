@@ -1,6 +1,6 @@
 const Message = require('../models/message_model');
 const Group = require('../models/group_model');
-const Pilgrim = require('../models/pilgrim_model');
+const User = require('../models/user_model');
 // User model not used directly here
 const { sendPushNotification } = require('../services/pushNotificationService');
 const { logger } = require('../config/logger');
@@ -33,7 +33,7 @@ exports.send_message = async (req, res) => {
             media_url = file.filename; // or full path depending on storage config
         }
 
-        const sender_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
+        const sender_model = 'User';
 
         const message = await Message.create({
             group_id,
@@ -61,8 +61,9 @@ exports.send_message = async (req, res) => {
         const group = await Group.findById(group_id);
         if (group) {
             const recipientIds = group.pilgrim_ids.filter(id => id.toString() !== req.user.id);
-            const pilgrims = await Pilgrim.find({
+            const pilgrims = await User.find({
                 _id: { $in: recipientIds },
+                user_type: 'pilgrim',
                 fcm_token: { $ne: null }
             }).select('fcm_token');
 
@@ -134,7 +135,7 @@ exports.send_individual_message = async (req, res) => {
             media_url = file.filename;
         }
 
-        const sender_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
+        const sender_model = 'User';
 
         const message = await Message.create({
             group_id,
@@ -162,7 +163,7 @@ exports.send_individual_message = async (req, res) => {
         }
 
         // --- Push Notification ---
-        const recipient = await Pilgrim.findById(recipient_id).select('fcm_token');
+        const recipient = await User.findById(recipient_id).select('fcm_token');
         if (recipient && recipient.fcm_token) {
             const title = is_urgent ? 'URGENT: Personal Message' : 'New Personal Message';
             const body = type === 'text' || type === 'tts'
@@ -196,7 +197,7 @@ exports.get_group_messages = async (req, res) => {
         const { group_id } = req.params;
         const { limit = 50, before } = req.query; // Pagination using timestamp
 
-        const query = req.user.role === 'pilgrim'
+        const query = req.user.user_type === 'pilgrim'
             ? { group_id, $or: [{ recipient_id: null }, { recipient_id: req.user.id }] }
             : { group_id };
         if (before) {

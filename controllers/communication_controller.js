@@ -24,16 +24,14 @@ exports.start_session = async (req, res) => {
             return res.status(403).json({ message: "Not authorized to start session in this group" });
         }
 
-        const initiator_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
-
         const session = await CommunicationSession.create({
             group_id,
             initiator_id: req.user.id,
-            initiator_model,
+            initiator_model: 'User',
             type,
             participants: [{
                 user_id: req.user.id,
-                user_model: initiator_model
+                user_model: 'User'
             }]
         });
 
@@ -57,15 +55,13 @@ exports.join_session = async (req, res) => {
     try {
         const { session_id } = req.body;
 
-        const user_model = req.user.role === 'pilgrim' ? 'Pilgrim' : 'User';
-
         const session = await CommunicationSession.findOneAndUpdate(
             { _id: session_id, status: 'active' },
             {
                 $addToSet: {
                     participants: {
                         user_id: req.user.id,
-                        user_model
+                        user_model: 'User'
                     }
                 }
             },
@@ -100,7 +96,7 @@ exports.end_session = async (req, res) => {
 
         // Only initiator or moderator can end (simplified check)
         // Ideally checking if user is a moderator of the group would be better security
-        if (session.initiator_id.toString() !== req.user.id && req.user.role === 'pilgrim') {
+        if (session.initiator_id.toString() !== req.user.id && req.user.user_type === 'pilgrim') {
             return res.status(403).json({ message: "Not authorized to end this session" });
         }
 

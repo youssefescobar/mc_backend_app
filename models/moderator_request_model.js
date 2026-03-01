@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const moderator_request_schema = new mongoose.Schema({
     pilgrim_id: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Pilgrim',
+        ref: 'User',
         required: true
     },
     status: {

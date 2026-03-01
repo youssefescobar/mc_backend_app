@@ -47,7 +47,7 @@ const notification_schema = new mongoose.Schema({
         inviter_name: String,
         pilgrim_id: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: 'Pilgrim'
+            ref: 'User'
         },
         pilgrim_name: String,
         pilgrim_phone: String,
