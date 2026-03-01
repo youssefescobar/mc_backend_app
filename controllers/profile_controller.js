@@ -1,4 +1,5 @@
 const User = require('../models/user_model');
+const Group = require('../models/group_model');
 const PendingUser = require('../models/pending_user_model');
 const ModeratorRequest = require('../models/moderator_request_model');
 const { logger } = require('../config/logger');

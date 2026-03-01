@@ -28,6 +28,7 @@ const generalLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => req.path === '/' || req.path === '/health', // Skip health checks
+    validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
 // Login limiter - 5 requests per 15 minutes
@@ -45,6 +46,7 @@ const loginLimiter = rateLimit({
     skipSuccessfulRequests: true, // Don't count successful logins
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
 // Register limiter - 10 requests per hour
@@ -61,6 +63,7 @@ const registerLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
 // Auth limiter (for other auth endpoints) - 20 requests per 15 minutes
@@ -78,6 +81,7 @@ const authLimiter = rateLimit({
     skipSuccessfulRequests: true,
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
 // Search limiter - 30 requests per minute
@@ -94,6 +98,7 @@ const searchLimiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { trustProxy: false }, // Disable trust proxy validation warning
 });
 
 module.exports = { 

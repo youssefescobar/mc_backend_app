@@ -372,11 +372,7 @@ const initializeSockets = (io) => {
 
             if (userId) {
                 try {
-                    if (role === 'pilgrim') {
-                        await Pilgrim.findByIdAndUpdate(userId, { is_online: false, last_active_at: new Date() });
-                    } else {
-                        await User.findByIdAndUpdate(userId, { is_online: false, last_active_at: new Date() });
-                    }
+                    await User.findByIdAndUpdate(userId, { is_online: false, last_active_at: new Date() });
 
                     if (groupId) {
                         io.to(`group_${groupId}`).emit('status_update', {
