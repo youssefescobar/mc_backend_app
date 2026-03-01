@@ -154,7 +154,7 @@ exports.join_group = async (req, res) => {
         }
 
         // Only pilgrims can join groups via code
-        if (req.user.user_type !== 'pilgrim') {
+        if (req.user.role !== 'pilgrim') {
             return sendError(res, 403, 'Only pilgrims can join groups via code. Moderators must be invited.');
         }
 
@@ -379,6 +379,17 @@ exports.remove_pilgrim_from_group = async (req, res) => {
         );
 
         if (!updated_group) return sendError(res, 404, 'Group not found');
+
+        // Notify the removed pilgrim via socket
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user_${user_id}`).emit('removed-from-group', {
+                group_id: group_id,
+                group_name: updated_group.group_name,
+                timestamp: new Date()
+            });
+            console.log(`[Socket] Pilgrim ${user_id} removed from group ${group_id}`);
+        }
 
         sendSuccess(res, 200, 'Pilgrim removed from group', {
             group: {

@@ -2,6 +2,7 @@ const User = require('../models/user_model');
 const Group = require('../models/group_model');
 const PendingUser = require('../models/pending_user_model');
 const ModeratorRequest = require('../models/moderator_request_model');
+const Notification = require('../models/notification_model');
 const { logger } = require('../config/logger');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
 const { sendSuccess, sendError, sendValidationError, sendServerError } = require('../utils/response_helpers');
@@ -347,7 +348,7 @@ exports.trigger_sos = async (req, res) => {
             .populate('moderator_ids', '_id full_name fcm_token');
 
         if (!group) {
-            return sendError(res, 404, 'Not assigned to any group');
+            return sendError(res, 400, 'You must join a group before you can send an SOS alert');
         }
 
         // Create notifications for all moderators in the group

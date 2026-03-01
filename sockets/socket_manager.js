@@ -97,29 +97,25 @@ const initializeSockets = (io) => {
             const CallHistory = require('../models/call_history_model');
 
             try {
-                // Fetch caller info
-                let caller = await User.findById(socket.data.userId).select('full_name role');
-                if (!caller) caller = await Pilgrim.findById(socket.data.userId).select('full_name role');
+                // Fetch caller info (don't use .select() to preserve virtual 'role' property)
+                const caller = await User.findById(socket.data.userId);
 
                 const callerInfo = {
                     id: socket.data.userId,
                     name: caller?.full_name || 'Unknown',
-                    role: caller?.role || 'Unknown'
+                    role: caller?.user_type || 'Unknown'
                 };
                 console.log(`[Socket] Caller info:`, callerInfo);
 
                 // Fetch recipient info (for FCM token)
-                let recipient = await User.findById(to).select('fcm_token full_name role');
-                if (!recipient) recipient = await Pilgrim.findById(to).select('fcm_token full_name role');
+                const recipient = await User.findById(to);
 
                 // Create call history record
-                const caller_model = caller?.role === 'pilgrim' ? 'Pilgrim' : 'User';
-                const receiver_model = recipient?.role === 'pilgrim' ? 'Pilgrim' : 'User';
                 const callRecord = await CallHistory.create({
                     caller_id: socket.data.userId,
-                    caller_model,
+                    caller_model: 'User',
                     receiver_id: to,
-                    receiver_model,
+                    receiver_model: 'User',
                     call_type: 'internet',
                     status: 'ringing'
                 });

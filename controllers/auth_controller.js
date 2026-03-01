@@ -200,7 +200,24 @@ exports.logout_user = async (req, res) => {
     try {
         const user_id = req.user.id;
 
-        await User.findByIdAndUpdate(user_id, { fcm_token: null });
+        await User.findByIdAndUpdate(user_id, { 
+            fcm_token: null,
+            is_online: false,
+            last_active_at: new Date()
+        });
+
+        // Notify group members about status change
+        const group = await Group.findOne({ pilgrim_ids: user_id });
+        if (group) {
+            const io = req.app.get('io');
+            if (io) {
+                io.to(`group_${group._id}`).emit('status_update', {
+                    pilgrimId: user_id,
+                    active: false,
+                    last_active_at: new Date()
+                });
+            }
+        }
 
         logger.info(`User logged out: ${user_id}`);
         sendSuccess(res, 200, 'Logged out successfully');
