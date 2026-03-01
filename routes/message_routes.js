@@ -3,15 +3,16 @@ const router = express.Router();
 const message_ctrl = require('../controllers/message_controller');
 const { protect } = require('../middleware/auth_middleware');
 const upload = require('../middleware/upload_middleware');
+const { validateUploadedFile } = require('../middleware/upload_middleware');
 
 // Protected routes
 router.use(protect);
 
 // Send message (Handles 'file' field for voice/image)
-router.post('/', upload.single('file'), message_ctrl.send_message);
+router.post('/', upload.single('file'), validateUploadedFile, message_ctrl.send_message);
 
 // Send individual message (Handles 'file' field for voice/image)
-router.post('/individual', upload.single('file'), message_ctrl.send_individual_message);
+router.post('/individual', upload.single('file'), validateUploadedFile, message_ctrl.send_individual_message);
 
 // Get messages for a group
 router.get('/group/:group_id', message_ctrl.get_group_messages);

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth_ctrl = require('../controllers/auth_controller');
+const profile_ctrl = require('../controllers/profile_controller');
 const { protect, authorize } = require('../middleware/auth_middleware');
 const validate = require('../middleware/validation_middleware');
 const {
@@ -30,20 +31,20 @@ router.use(protect); // Apply protection to all routes below
 
 // Auth & Profile
 router.post('/logout', auth_ctrl.logout_user);
-router.get('/me', auth_ctrl.get_profile);
-router.put('/update-profile', validate(update_profile_schema), auth_ctrl.update_profile);
-router.put('/update-language', validate(update_language_schema), auth_ctrl.update_language);
-router.put('/location', auth_ctrl.update_location);
-router.put('/fcm-token', auth_ctrl.update_fcm_token);
+router.get('/me', profile_ctrl.get_profile);
+router.put('/update-profile', validate(update_profile_schema), profile_ctrl.update_profile);
+router.put('/update-language', validate(update_language_schema), profile_ctrl.update_language);
+router.put('/location', profile_ctrl.update_location);
+router.put('/fcm-token', profile_ctrl.update_fcm_token);
 
 // Email Verification
-router.post('/add-email', validate(add_email_schema), auth_ctrl.add_email);
-router.post('/send-email-verification', auth_ctrl.send_email_verification);
-router.post('/resend-verification', auth_ctrl.send_email_verification);
-router.post('/verify-email', validate(verify_pilgrim_email_schema), auth_ctrl.verify_pilgrim_email);
+router.post('/add-email', validate(add_email_schema), profile_ctrl.add_email);
+router.post('/send-email-verification', profile_ctrl.send_email_verification);
+router.post('/resend-verification', profile_ctrl.send_email_verification);
+router.post('/verify-email', validate(verify_pilgrim_email_schema), profile_ctrl.verify_pilgrim_email);
 
 // Moderator Request
-router.post('/request-moderator', validate(request_moderator_schema), auth_ctrl.request_moderator);
+router.post('/request-moderator', validate(request_moderator_schema), profile_ctrl.request_moderator);
 
 
 // ==========================================
