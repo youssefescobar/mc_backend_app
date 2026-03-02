@@ -104,21 +104,41 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Graceful Shutdown
-const gracefulShutdown = async () => {
-    logger.info('Received shutdown signal, closing server gracefully...');
-    
+let isShuttingDown = false;
+
+const gracefulShutdown = async ({ signal = 'SIGTERM', forwardSignal = false } = {}) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    logger.info(`Received ${signal}, closing server gracefully...`);
+
     server.close(async () => {
         logger.info('HTTP server closed');
         await disconnectDB();
+
+        // For nodemon restarts: release resources first, then re-emit signal
+        // so nodemon can start the new instance safely.
+        if (forwardSignal) {
+            process.kill(process.pid, signal);
+            return;
+        }
+
         process.exit(0);
     });
 
     // Force close after 10 seconds
     setTimeout(() => {
         logger.error('Forcing shutdown after timeout');
+        if (forwardSignal) {
+            process.kill(process.pid, signal);
+            return;
+        }
         process.exit(1);
-    }, 10000);
+    }, 10000).unref();
 };
 
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', () => gracefulShutdown({ signal: 'SIGTERM' }));
+process.on('SIGINT', () => gracefulShutdown({ signal: 'SIGINT' }));
+process.once('SIGUSR2', () =>
+    gracefulShutdown({ signal: 'SIGUSR2', forwardSignal: true }),
+);

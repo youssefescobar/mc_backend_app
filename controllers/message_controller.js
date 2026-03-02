@@ -76,6 +76,7 @@ exports.send_message = async (req, res) => {
 
                 sendPushNotification(tokens, title, body, {
                     group_id,
+                    group_name: group.group_name,
                     type: 'new_message',
                     messageType: type, // Pass 'text', 'tts', 'voice', etc.
                     message_id: message._id.toString()
@@ -172,6 +173,7 @@ exports.send_individual_message = async (req, res) => {
 
             sendPushNotification([recipient.fcm_token], title, body, {
                 group_id,
+                group_name: group.group_name,
                 recipient_id,
                 type: 'new_message',
                 messageType: type, // Pass 'text', 'tts', 'voice', etc.

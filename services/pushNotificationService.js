@@ -13,6 +13,12 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         throw new Error('Firebase Admin is not initialized');
     }
 
+    // Guard: never send a notification with empty title/body
+    if (!title || !body) {
+        logger.warn('[FCM] Skipping notification with empty title or body', { title, body });
+        return null;
+    }
+
     // Determine if we should use Data-Only (Silent) payload.
     // We ONLY want Data-Only for "Urgent TTS" messages so the app can control the "Sound -> TTS -> Sound" sequence.
     // For other urgent messages (Text, Voice Note) or normal messages, we want standard system notifications.
@@ -20,11 +26,17 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
     const isIncomingCall = data.type === 'incoming_call';
 
     // Construct the message payload (Base)
+    // Preserve the caller-supplied 'type' (e.g. 'new_message') as 'notification_type'
+    // so we can use it for deep-link navigation on the client side.
+    const notificationType = data.type || 'general';
     const message = {
         tokens: tokens,
         data: {
             ...data,
+            // 'type' controls how the Flutter client shows the notification (urgent/normal/incoming_call)
             type: isIncomingCall ? 'incoming_call' : (isUrgent ? 'urgent' : 'normal'),
+            // 'notification_type' is the semantic type — what this notification is about
+            notification_type: notificationType,
             title: title,
             body: body,
         },
