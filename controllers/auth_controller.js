@@ -2,6 +2,8 @@ const User = require('../models/user_model');
 const PendingUser = require('../models/pending_user_model');
 const Group = require('../models/group_model');
 const PendingPilgrim = require('../models/pending_pilgrim_model');
+const ModeratorRequest = require('../models/moderator_request_model');
+const Notification = require('../models/notification_model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
@@ -147,19 +149,43 @@ exports.resend_verification = async (req, res) => {
 exports.login_user = async (req, res) => {
     try {
         const { identifier, password } = req.body;
+        const normalized_identifier = String(identifier || '').trim();
+
+        logger.info(`[LOGIN DEBUG] identifier="${normalized_identifier}", password length=${password ? password.length : 0}`);
+
+        if (!normalized_identifier) {
+            return sendValidationError(res, { identifier: 'Email, national ID, or phone number is required' });
+        }
+
+        const is_email_identifier = normalized_identifier.includes('@');
+        const escaped_identifier = normalized_identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        // Also try with '+' prefix for phone numbers entered without it
+        const phone_variants = [normalized_identifier];
+        if (/^\d+$/.test(normalized_identifier)) {
+            phone_variants.push(`+${normalized_identifier}`);
+        }
+
+        const query = {
+            $or: [
+                ...(is_email_identifier
+                    ? [{ email: { $regex: `^${escaped_identifier}$`, $options: 'i' } }]
+                    : [{ email: normalized_identifier }]),
+                { national_id: normalized_identifier },
+                { phone_number: { $in: phone_variants } }
+            ]
+        };
+        logger.info(`[LOGIN DEBUG] query=${JSON.stringify(query)}`);
 
         // Find user by identifier (email, national_id, or phone_number)
-        const user = await User.findOne({
-            $or: [
-                { email: identifier },
-                { national_id: identifier },
-                { phone_number: identifier }
-            ]
-        });
+        const user = await User.findOne(query);
 
         if (!user) {
+            logger.warn(`[LOGIN DEBUG] No user found for identifier="${normalized_identifier}"`);
             return sendError(res, 401, 'Invalid credentials');
         }
+
+        logger.info(`[LOGIN DEBUG] Found user: _id=${user._id}, email=${user.email}, national_id=${user.national_id}, phone=${user.phone_number}, user_type=${user.user_type}, has_password=${!!user.password}, password_hash_prefix=${user.password ? user.password.substring(0, 10) : 'NONE'}`);
 
         // Check if account is active
         if (user.active === false) {
@@ -168,6 +194,7 @@ exports.login_user = async (req, res) => {
 
         // Verify password
         const is_match = await bcrypt.compare(password, user.password);
+        logger.info(`[LOGIN DEBUG] bcrypt.compare result=${is_match}`);
         if (!is_match) {
             return sendError(res, 401, 'Invalid credentials');
         }
@@ -223,6 +250,73 @@ exports.logout_user = async (req, res) => {
         sendSuccess(res, 200, 'Logged out successfully');
     } catch (error) {
         sendServerError(res, logger, 'Logout error', error);
+    }
+};
+
+/**
+ * Refresh session token using the current role from DB.
+ * This allows seamless role upgrades (pilgrim -> moderator) without re-login.
+ */
+exports.refresh_session = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id full_name user_type');
+
+        if (!user) {
+            return sendError(res, 404, 'User not found');
+        }
+
+        let moderator_request_status = null;
+        const latest_request = await ModeratorRequest.findOne({ pilgrim_id: user._id })
+            .sort({ requested_at: -1 })
+            .select('_id status');
+        if (latest_request) {
+            moderator_request_status = latest_request.status;
+        }
+
+        // Ensure approval notification exists once, then notify app to refresh alerts.
+        if (latest_request?.status === 'approved') {
+            const existing_approval_notification = await Notification.findOne({
+                user_id: user._id,
+                type: 'moderator_request_approved',
+                'data.request_id': latest_request._id,
+            });
+
+            if (!existing_approval_notification) {
+                await Notification.create({
+                    user_id: user._id,
+                    type: 'moderator_request_approved',
+                    title: 'Moderator Request Approved',
+                    message: 'Your moderator request has been approved. You can now switch to the moderator dashboard.',
+                    data: {
+                        request_id: latest_request._id,
+                    },
+                });
+
+                const io = req.app.get('socketio');
+                if (io) {
+                    io.to(`user_${user._id}`).emit('notification_refresh');
+                    io.to(`user_${user._id}`).emit('moderator-request-approved', {
+                        requestId: latest_request._id.toString(),
+                    });
+                }
+            }
+        }
+
+        const token = jwt.sign(
+            { id: user._id, role: user.user_type },
+            process.env.JWT_SECRET,
+            { expiresIn: JWT_EXPIRATION }
+        );
+
+        sendSuccess(res, 200, 'Session refreshed', {
+            token,
+            role: user.user_type,
+            user_id: user._id,
+            full_name: user.full_name,
+            moderator_request_status,
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Refresh session error', error);
     }
 };
 

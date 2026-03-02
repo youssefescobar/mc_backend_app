@@ -31,6 +31,7 @@ router.use(protect); // Apply protection to all routes below
 
 // Auth & Profile
 router.post('/logout', auth_ctrl.logout_user);
+router.post('/refresh-session', auth_ctrl.refresh_session);
 router.get('/me', profile_ctrl.get_profile);
 router.put('/update-profile', validate(update_profile_schema), profile_ctrl.update_profile);
 router.put('/update-language', validate(update_language_schema), profile_ctrl.update_language);

@@ -2,6 +2,7 @@ const Group = require('../models/group_model');
 const User = require('../models/user_model');
 const SuggestedArea = require('../models/suggested_area_model');
 const Notification = require('../models/notification_model');
+const Message = require('../models/message_model');
 const QRCode = require('qrcode');
 const { logger } = require('../config/logger');
 const { sendSuccess, sendError, sendServerError } = require('../utils/response_helpers');
@@ -736,6 +737,35 @@ exports.delete_suggested_area = async (req, res) => {
             return sendError(res, 404, 'Suggested area not found');
         }
 
+        // Remove related alert notifications from pilgrim alerts list
+        await Notification.deleteMany({
+            type: area.area_type === 'meetpoint' ? 'meetpoint' : 'suggested_area',
+            'data.group_id': group_id,
+            $or: [
+                { 'data.area_id': area_id },
+                { 'data.area_id': area._id }
+            ]
+        });
+
+        // If deleting a meetpoint, also remove the linked meetpoint chat message(s)
+        let removedMessageIds = [];
+        if (area.area_type === 'meetpoint') {
+            const meetpointMessages = await Message.find({
+                group_id,
+                type: 'meetpoint',
+                $or: [
+                    { 'meetpoint_data.area_id': area_id },
+                    { 'meetpoint_data.area_id': area._id }
+                ]
+            }).select('_id').lean();
+
+            removedMessageIds = meetpointMessages.map(m => m._id.toString());
+
+            if (removedMessageIds.length > 0) {
+                await Message.deleteMany({ _id: { $in: removedMessageIds } });
+            }
+        }
+
         // --- Socket.io real-time broadcast ---
         const io = req.app.get('socketio');
         if (io) {
@@ -744,6 +774,19 @@ exports.delete_suggested_area = async (req, res) => {
                 group_id,
                 area_type: area.area_type
             });
+
+            // Remove linked meetpoint message(s) from open chats in real time
+            for (const messageId of removedMessageIds) {
+                io.to(`group_${group_id}`).emit('message_deleted', {
+                    message_id: messageId,
+                    group_id
+                });
+            }
+
+            // Refresh pilgrim alerts badge/list after notification deletion
+            for (const pilgrimId of group.pilgrim_ids || []) {
+                io.to(`user_${pilgrimId}`).emit('notification_refresh');
+            }
         }
 
         sendSuccess(res, 200, 'Suggested area removed');

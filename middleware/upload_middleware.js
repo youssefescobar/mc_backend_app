@@ -81,6 +81,15 @@ function validateFileSignature(buffer) {
         if (waveHeader === '57415645') return true; // 'WAVE'
     }
     
+    // M4A / AAC / MP4 container: ftyp box at offset 4
+    if (buffer.length >= 8) {
+        const ftyp = buffer.toString('hex', 4, 8);
+        if (ftyp === '66747970') return true; // 'ftyp'
+    }
+
+    // WebM / Matroska container (used by some Android recorders)
+    if (hex.startsWith('1a45dfa3')) return true; // EBML header
+    
     return false;
 }
 
