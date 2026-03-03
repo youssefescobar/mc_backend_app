@@ -631,7 +631,7 @@ exports.add_suggested_area = async (req, res) => {
         // Get pilgrim IDs (pilgrims ARE the direct users — use _id for notification)
         const pilgrimDocs = await User.find(
             { _id: { $in: group.pilgrim_ids }, user_type: 'pilgrim' },
-            '_id'
+            '_id fcm_token'
         ).lean();
 
         const notifications = pilgrimDocs.map(p => ({
@@ -654,6 +654,24 @@ exports.add_suggested_area = async (req, res) => {
                 for (const p of pilgrimDocs) {
                     io.to(`user_${p._id}`).emit('notification_refresh');
                 }
+            }
+        }
+
+        // --- FCM push so offline / killed-app pilgrims receive the notification ---
+        const { sendPushNotification } = require('../services/pushNotificationService');
+        const fcmTokens = pilgrimDocs.map(p => p.fcm_token).filter(Boolean);
+        if (fcmTokens.length > 0) {
+            try {
+                await sendPushNotification(fcmTokens, notifTitle, notifMessage, {
+                    type: notifType,
+                    notification_type: notifType,
+                    group_id: group_id.toString(),
+                    group_name: group.group_name,
+                    area_id: area._id.toString(),
+                }, type === 'meetpoint');
+                logger.info(`[FCM] ${notifType} push sent to ${fcmTokens.length} token(s)`);
+            } catch (fcmErr) {
+                logger.error(`[FCM] ${notifType} push failed: ${fcmErr.message}`);
             }
         }
 
