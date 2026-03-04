@@ -80,10 +80,37 @@ exports.mark_read = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to mark calls as read' });
     }
 };
+// Check if a call from a specific caller is still active (ringing or in-progress).
+// No auth required — used by the killed-state accept flow to verify the call
+// hasn't been cancelled before joining the Agora channel.
+exports.check_call_active = async (req, res) => {
+    try {
+        const { callerId } = req.query;
+        if (!callerId) {
+            return res.json({ active: false, status: 'none' });
+        }
+
+        const activeCall = await CallHistory.findOne({
+            caller_id: callerId,
+            status: { $in: ['ringing', 'in-progress'] }
+        }).sort({ createdAt: -1 });
+
+        res.json({
+            active: !!activeCall,
+            status: activeCall?.status || 'none',
+            callRecordId: activeCall?._id?.toString() || null
+        });
+    } catch (error) {
+        logger.error(`Error checking call status: ${error.message}`);
+        res.status(500).json({ active: false, status: 'error' });
+    }
+};
+
 // Answer a call from background/killed state (REST fallback when socket isn't connected)
 exports.answer_call = async (req, res) => {
     try {
         const { callerId, answererId } = req.body;
+        logger.info(`[API] /call-history/answer hit: callerId=${callerId || ''}, answererId=${answererId || ''}`);
         if (!callerId) return res.status(400).json({ success: false, message: 'callerId required' });
 
         // Find the caller's active socket and emit call-answer
@@ -117,6 +144,7 @@ exports.answer_call = async (req, res) => {
 exports.decline_call = async (req, res) => {
     try {
         const { callerId, declinerId } = req.body;
+        logger.info(`[API] /call-history/decline hit: callerId=${callerId || ''}, declinerId=${declinerId || ''}`);
         if (!callerId) return res.status(400).json({ success: false, message: 'callerId required' });
 
         // Find the caller's active socket and emit call-declined

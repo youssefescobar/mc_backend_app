@@ -24,6 +24,7 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
     // For other urgent messages (Text, Voice Note) or normal messages, we want standard system notifications.
     const isUrgentTTS = isUrgent && data.messageType === 'tts';
     const isIncomingCall = data.type === 'incoming_call';
+    const isCallCancel = data.type === 'call_cancel';
 
     // Construct the message payload (Base)
     // Preserve the caller-supplied 'type' (e.g. 'new_message') as 'notification_type'
@@ -34,7 +35,8 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         data: {
             ...data,
             // 'type' controls how the Flutter client shows the notification (urgent/normal/incoming_call)
-            type: isIncomingCall ? 'incoming_call' : (isUrgent ? 'urgent' : 'normal'),
+            // call_cancel and incoming_call must keep their original type so Flutter recognises them.
+            type: (isIncomingCall || isCallCancel) ? data.type : (isUrgent ? 'urgent' : 'normal'),
             // 'notification_type' is the semantic type — what this notification is about
             notification_type: notificationType,
             title: title,
@@ -59,6 +61,11 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         // If we include a 'notification' block, Android shows its own
         // notification and the background handler may NOT run.
         logger.info('[FCM] Sending DATA-ONLY incoming call (flutter_callkit_incoming will show native call UI)');
+    } else if (isCallCancel) {
+        // ── CALL CANCEL: DATA-ONLY ──────────────────────────────────────────
+        // Must be data-only so the Flutter background handler fires and
+        // dismisses the native incoming-call UI via FlutterCallkitIncoming.
+        logger.info('[FCM] Sending DATA-ONLY call_cancel (Flutter will dismiss native call UI)');
     } else {
         // Standard Notification for everything else (messages, urgent text, etc.)
         message.notification = {
