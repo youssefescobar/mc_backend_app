@@ -67,8 +67,8 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         };
 
         message.android.notification = {
-            channelId: isUrgent ? 'urgent' : 'default',
-            sound: isUrgent ? 'urgent.wav' : undefined,
+            channelId: isUrgent ? 'mc_urgent_v2' : 'mc_default_v2',
+            sound: isUrgent ? 'urgent_tts' : 'background_app',
             priority: 'max',
             visibility: 'public',
         };
