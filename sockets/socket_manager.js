@@ -148,7 +148,8 @@ const initializeSockets = (io) => {
                                 callerId: socket.data.userId,
                                 callerName: callerInfo.name,
                                 callerRole: callerInfo.role,
-                                channelName
+                                channelName,
+                                callRecordId: callRecord._id.toString()
                             },
                             true // high priority
                         );
@@ -169,6 +170,7 @@ const initializeSockets = (io) => {
             console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
             const target = getSocketByUserId(to);
             if (target) {
+                console.log(`[Socket] Relaying call-answer to socket ${target.id}`);
                 target.emit('call-answer', { from: socket.data.userId });
 
                 // Update call record to in-progress
@@ -200,6 +202,7 @@ const initializeSockets = (io) => {
             console.log(`[Socket] Call declined from ${socket.data.userId} to ${to}`);
             const target = getSocketByUserId(to);
             if (target) {
+                console.log(`[Socket] Relaying call-declined to socket ${target.id}`);
                 target.emit('call-declined', { from: socket.data.userId });
 
                 try {
@@ -367,11 +370,35 @@ const initializeSockets = (io) => {
 
         // call-cancel: caller hung up while recipient had a Notifee notification open
         // This tells the recipient's app to dismiss the incoming call notification/UI
-        socket.on('call-cancel', ({ to }) => {
+        socket.on('call-cancel', async ({ to }) => {
             console.log(`[Socket] Call cancelled by ${socket.data.userId}, notifying ${to}`);
             const target = getSocketByUserId(to);
             if (target) {
                 target.emit('call-cancel', { from: socket.data.userId });
+            } else {
+                // Recipient has no active socket (killed/offline) — send high-priority
+                // data-only FCM so Flutter background handler can dismiss CallKit UI.
+                try {
+                    const { sendPushNotification } = require('../services/pushNotificationService');
+                    const recipient = await User.findById(to).select('fcm_token full_name');
+                    if (recipient?.fcm_token) {
+                        await sendPushNotification(
+                            [recipient.fcm_token],
+                            'Call Cancelled',
+                            'Caller ended the call',
+                            {
+                                type: 'call_cancel',
+                                callerId: socket.data.userId,
+                            },
+                            true
+                        );
+                        console.log(`[Socket] ✓ call_cancel FCM sent to ${recipient.full_name}`);
+                    } else {
+                        console.log(`[Socket] Recipient ${to} has no FCM token for call_cancel`);
+                    }
+                } catch (err) {
+                    console.error('[Socket] Error sending call_cancel FCM:', err);
+                }
             }
         });
 
