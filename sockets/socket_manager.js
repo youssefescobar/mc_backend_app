@@ -309,75 +309,21 @@ const initializeSockets = (io) => {
                 console.log(`[Socket] Relaying call-declined to ${callerSockets.length} caller socket(s) in ${callerRoom}`);
                 io.to(callerRoom).emit('call-declined', { from: socket.data.userId });
 
+                // Only update the call record status — do NOT create a missed-call
+                // notification or send FCM here. The caller's 'call-end' event is
+                // the single authoritative source for missed-call notifications,
+                // avoiding duplicate notifications when the receiver's CallKit
+                // dismisses and triggers an automatic decline signal.
                 try {
                     const CallHistory = require('../models/call_history_model');
-                    const Notification = require('../models/notification_model');
-                    const { sendPushNotification } = require('../services/pushNotificationService');
-                    const declinedByRoom = `user_${socket.data.userId}`;
 
-                    // Stop the incoming-call UI on the decliner's other devices.
-                    socket.to(declinedByRoom).emit('call-cancel', { from: to });
-
-                    const callerCurrentCallId = callerSockets[0].data.currentCallId;
-                    if (callerCurrentCallId) {
-                        const callRecord = await CallHistory.findById(callerCurrentCallId);
-
-                        await CallHistory.findByIdAndUpdate(callerCurrentCallId, {
+                    if (target.data.currentCallId) {
+                        await CallHistory.findByIdAndUpdate(target.data.currentCallId, {
                             status: 'declined',
                             ended_at: new Date()
                         });
                         console.log(`[Socket] Call record updated to declined`);
-
-                        // ── Create "missed call" notification for the RECEIVER ──
-                        // (the person who declined / timed-out still sees it as
-                        //  a missed call in their alerts, like a normal phone)
-                        if (callRecord) {
-                            const receiverId = socket.data.userId; // the one who declined
-                            // Fetch caller (moderator) name
-                            const callerId = to;
-                            let caller = await User.findById(callerId).select('full_name');
-                            if (!caller) caller = await Pilgrim.findById(callerId).select('full_name');
-                            const callerName = caller?.full_name || 'Unknown';
-
-                            await Notification.create({
-                                user_id: receiverId,
-                                type: 'missed_call',
-                                title: 'Missed Call',
-                                message: `You missed a call from ${callerName}`,
-                                data: {
-                                    caller_id: callerId,
-                                    caller_name: callerName
-                                }
-                            });
-                            console.log(`[Socket] ✓ Missed call notification created for ${receiverId}`);
-
-                            // Real-time event so the app refreshes the badge
-                            const receiverSockets = await io.in(`user_${receiverId}`).fetchSockets();
-                            if (receiverSockets.length > 0) {
-                                io.to(`user_${receiverId}`).emit('missed-call-received', {
-                                    callId: callRecord._id.toString(),
-                                    callerId,
-                                    callerName
-                                });
-                            }
-
-                            // FCM push (standard, not full-screen)
-                            let receiver = await User.findById(receiverId).select('fcm_token full_name');
-                            if (!receiver) receiver = await Pilgrim.findById(receiverId).select('fcm_token full_name');
-                            if (receiver?.fcm_token) {
-                                await sendPushNotification(
-                                    [receiver.fcm_token],
-                                    'Missed Call',
-                                    `You missed a call from ${callerName}`,
-                                    { type: 'missed_call', callerId, callerName }
-                                );
-                                console.log(`[Socket] ✓ Missed call FCM sent to ${receiver.full_name}`);
-                            }
-                        }
-
-                        for (const callerSocket of callerSockets) {
-                            delete callerSocket.data.currentCallId;
-                        }
+                        delete target.data.currentCallId;
                     }
                 } catch (error) {
                     console.error('[Socket] Error updating call record:', error);

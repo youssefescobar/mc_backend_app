@@ -19,7 +19,8 @@ const notification_schema = new mongoose.Schema({
             'sos_alert',
             'suggested_area',
             'meetpoint',
-            'missed_call'
+            'missed_call',
+            'reminder'
         ],
         required: true
     },

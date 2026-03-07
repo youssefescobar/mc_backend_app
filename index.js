@@ -23,6 +23,7 @@ const push_notification_routes = require('./routes/push_notification_routes');
 const message_routes = require('./routes/message_routes');
 const communication_routes = require('./routes/communication_routes');
 const call_history_routes = require('./routes/call_history_routes');
+const reminder_routes = require('./routes/reminder_routes');
 
 // Initialization
 const app = express();
@@ -72,14 +73,15 @@ app.use((req, res, next) => {
 // Database Connection
 connectDB();
 
-// ── Unauthenticated call-history endpoints (MUST come before invitation_routes
-//    because invitation_routes is mounted at /api with router.use(protect) which
-//    would otherwise intercept these requests and return 401) ───────────────────
-const call_history_ctrl = require('./controllers/call_history_controller');
-app.post('/api/call-history/decline', call_history_ctrl.decline_call);
-app.post('/api/call-history/answer', call_history_ctrl.answer_call);
-app.get('/api/call-history/check-active', call_history_ctrl.check_call_active);
+// Start the reminder scheduler once Mongoose has an open connection.
+// Using the 'open' event is reliable even when connectDB retries internally.
+const mongoose = require('mongoose');
+const { init: initReminderScheduler } = require('./services/reminderScheduler');
+mongoose.connection.once('open', () => {
+    initReminderScheduler();
+});
 
+// Routes Application
 app.use('/api/push', push_notification_routes);
 app.use('/api/auth', auth_routes);
 app.use('/api/groups', group_routes);
@@ -89,6 +91,7 @@ app.use('/api/pilgrim', pilgrim_routes);
 app.use('/api/messages', message_routes);
 app.use('/api/communication', communication_routes);
 app.use('/api/call-history', call_history_routes);
+app.use('/api/reminders', reminder_routes);
 
 app.get('/', (req, res) => res.send("Hajj App Backend Running"));
 
