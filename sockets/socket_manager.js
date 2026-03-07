@@ -122,6 +122,97 @@ const initializeSockets = (io) => {
                 socket.data.currentCallId = callRecord._id;
                 console.log(`[Socket] Call record created: ${callRecord._id}`);
 
+                // ── Server-side ring timeout ─────────────────────────────────
+                // When the recipient's app is killed, the Flutter engine may not
+                // start on decline, so the client-side HTTP fallback never fires.
+                // This server timeout is the safety net: after 35 s, if the call
+                // is still "ringing", mark it as missed and notify the caller.
+                if (socket.data.callRingTimeout) clearTimeout(socket.data.callRingTimeout);
+                const callRecordId = callRecord._id;
+                const callerId = socket.data.userId;
+                const receiverId = to;
+                socket.data.callRingTimeout = setTimeout(async () => {
+                    try {
+                        const record = await CallHistory.findById(callRecordId);
+                        if (!record || record.status !== 'ringing') return;
+
+                        console.log(`[Socket] ⏰ Ring timeout for call ${callRecordId} — marking as missed`);
+
+                        await CallHistory.findByIdAndUpdate(callRecordId, {
+                            status: 'missed',
+                            ended_at: new Date()
+                        });
+
+                        // Tell the caller the call was not answered
+                        const callerRoom = `user_${callerId}`;
+                        io.to(callerRoom).emit('call-declined', { from: receiverId });
+                        console.log(`[Socket] ⏰ Emitted call-declined to caller ${callerId}`);
+
+                        // ── Also send a silent FCM to the MODERATOR (caller) as a guaranteed fallback.
+                        // Even if the socket.emit above is missed (e.g. brief reconnect), the FCM
+                        // wakes up the Flutter foreground handler and stops the ringing.
+                        try {
+                            const callerUser = await User.findById(callerId).select('fcm_token full_name');
+                            if (callerUser?.fcm_token) {
+                                await sendPushNotification(
+                                    [callerUser.fcm_token],
+                                    'Call Not Answered',
+                                    'The call was not answered',
+                                    {
+                                        type: 'call_declined',
+                                        callerId: receiverId,   // who declined (pilgrim)
+                                        callRecordId: callRecordId.toString()
+                                    },
+                                    true // high priority data-only
+                                );
+                                console.log(`[Socket] ⏰ call_declined FCM sent to moderator ${callerUser.full_name}`);
+                            }
+                        } catch (fcmCallerErr) {
+                            console.error('[Socket] ⏰ Error sending call_declined FCM to caller:', fcmCallerErr);
+                        }
+
+                        // Clean up caller socket's currentCallId
+                        const callerSockets = await io.in(callerRoom).fetchSockets();
+                        for (const s of callerSockets) {
+                            delete s.data.currentCallId;
+                            delete s.data.callRingTimeout;
+                        }
+
+                        // Dismiss the native call screen on receiver's device(s)
+                        try {
+                            const rcpt = await User.findById(receiverId).select('fcm_token full_name');
+                            if (rcpt?.fcm_token) {
+                                await sendPushNotification(
+                                    [rcpt.fcm_token],
+                                    'Call Cancelled',
+                                    'Caller ended the call',
+                                    { type: 'call_cancel', callerId },
+                                    true
+                                );
+                                console.log(`[Socket] ⏰ call_cancel FCM sent to ${rcpt.full_name}`);
+                            }
+                        } catch (fcmErr) {
+                            console.error('[Socket] ⏰ Error sending timeout call_cancel FCM:', fcmErr);
+                        }
+
+                        // Create missed-call notification for receiver
+                        try {
+                            const Notification = require('../models/notification_model');
+                            await Notification.create({
+                                user_id: receiverId,
+                                type: 'missed_call',
+                                title: 'Missed Call',
+                                message: `You missed a call from ${callerInfo.name}`,
+                                data: { caller_id: callerId, caller_name: callerInfo.name }
+                            });
+                        } catch (notifErr) {
+                            console.error('[Socket] ⏰ Error creating missed-call notification:', notifErr);
+                        }
+                    } catch (err) {
+                        console.error('[Socket] ⏰ Ring timeout handler error:', err);
+                    }
+                }, 30000); // ← 30 s matches the CallKit native ring duration
+
                 // Check if recipient is reachable via socket.
                 // Use the personal room ('user_<id>') rather than a raw scan —
                 // the room is joined synchronously in 'register-user' and is
@@ -168,7 +259,13 @@ const initializeSockets = (io) => {
 
         socket.on('call-answer', async ({ to }) => {
             console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
-            const target = getSocketByUserId(to);
+            // Clear the caller's ring timeout — the call was answered
+            const callerSocket = getSocketByUserId(to);
+            if (callerSocket?.data?.callRingTimeout) {
+                clearTimeout(callerSocket.data.callRingTimeout);
+                delete callerSocket.data.callRingTimeout;
+            }
+            const target = callerSocket || getSocketByUserId(to);
             if (target) {
                 console.log(`[Socket] Relaying call-answer to socket ${target.id}`);
                 target.emit('call-answer', { from: socket.data.userId });
@@ -200,10 +297,17 @@ const initializeSockets = (io) => {
 
         socket.on('call-declined', async ({ to }) => {
             console.log(`[Socket] Call declined from ${socket.data.userId} to ${to}`);
-            const target = getSocketByUserId(to);
-            if (target) {
-                console.log(`[Socket] Relaying call-declined to socket ${target.id}`);
-                target.emit('call-declined', { from: socket.data.userId });
+            // Clear the caller's ring timeout — decline was explicit
+            const callerSock = getSocketByUserId(to);
+            if (callerSock?.data?.callRingTimeout) {
+                clearTimeout(callerSock.data.callRingTimeout);
+                delete callerSock.data.callRingTimeout;
+            }
+            const callerRoom = `user_${to}`;
+            const callerSockets = await io.in(callerRoom).fetchSockets();
+            if (callerSockets.length > 0) {
+                console.log(`[Socket] Relaying call-declined to ${callerSockets.length} caller socket(s) in ${callerRoom}`);
+                io.to(callerRoom).emit('call-declined', { from: socket.data.userId });
 
                 // Only update the call record status — do NOT create a missed-call
                 // notification or send FCM here. The caller's 'call-end' event is
@@ -224,12 +328,23 @@ const initializeSockets = (io) => {
                 } catch (error) {
                     console.error('[Socket] Error updating call record:', error);
                 }
+            } else {
+                console.log(`[Socket] Caller user ${to} not found for call-declined`);
             }
         });
 
         socket.on('call-end', async ({ to }) => {
             console.log(`[Socket] Call end from ${socket.data.userId} to ${to}`);
+            // Clear ring timeout on both sides
+            if (socket.data.callRingTimeout) {
+                clearTimeout(socket.data.callRingTimeout);
+                delete socket.data.callRingTimeout;
+            }
             const target = getSocketByUserId(to);
+            if (target?.data?.callRingTimeout) {
+                clearTimeout(target.data.callRingTimeout);
+                delete target.data.callRingTimeout;
+            }
             if (target) {
                 target.emit('call-end', { from: socket.data.userId });
             }
@@ -325,6 +440,11 @@ const initializeSockets = (io) => {
         // This tells the recipient's app to dismiss the incoming call notification/UI
         socket.on('call-cancel', async ({ to }) => {
             console.log(`[Socket] Call cancelled by ${socket.data.userId}, notifying ${to}`);
+            // Clear ring timeout — caller cancelled
+            if (socket.data.callRingTimeout) {
+                clearTimeout(socket.data.callRingTimeout);
+                delete socket.data.callRingTimeout;
+            }
             const target = getSocketByUserId(to);
             if (target) {
                 target.emit('call-cancel', { from: socket.data.userId });
@@ -399,6 +519,11 @@ const initializeSockets = (io) => {
 
         // ── Disconnect ────────────────────────────────────────────────────────
         socket.on('disconnect', async (reason) => {
+            // Clean up any pending ring timeout
+            if (socket.data.callRingTimeout) {
+                clearTimeout(socket.data.callRingTimeout);
+                delete socket.data.callRingTimeout;
+            }
             const { userId, role, groupId, navBeacon } = socket.data;
             console.log(`[Socket] User disconnected: ${socket.id} (Reason: ${reason}, User: ${userId})`);
 

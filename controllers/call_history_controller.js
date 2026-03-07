@@ -143,29 +143,82 @@ exports.answer_call = async (req, res) => {
 // Decline a call from background/killed state (REST fallback when socket isn't connected)
 exports.decline_call = async (req, res) => {
     try {
-        const { callerId, declinerId } = req.body;
-        logger.info(`[API] /call-history/decline hit: callerId=${callerId || ''}, declinerId=${declinerId || ''}`);
-        if (!callerId) return res.status(400).json({ success: false, message: 'callerId required' });
+        let { callerId, declinerId, callRecordId } = req.body;
+        logger.info(`[API] /call-history/decline hit: callerId=${callerId || ''}, declinerId=${declinerId || ''}, callRecordId=${callRecordId || ''}`);
 
-        // Find the caller's active socket and emit call-declined
+        // Resolve decliner from payload when present, otherwise infer from the
+        // most recent ringing call record.
+        let resolvedDeclinerId = declinerId || '';
+
+        if ((!callerId || !resolvedDeclinerId) && callRecordId) {
+            const callRecord = await CallHistory.findById(callRecordId)
+                .select('caller_id receiver_id status');
+            if (callRecord) {
+                callerId = callerId || callRecord.caller_id?.toString() || '';
+                resolvedDeclinerId =
+                    resolvedDeclinerId ||
+                    callRecord.receiver_id?.toString() ||
+                    '';
+            }
+        }
+
+        if (!callerId) {
+            return res.status(400).json({ success: false, message: 'callerId or callRecordId required' });
+        }
+
+        if (!resolvedDeclinerId) {
+            const ringingCall = await CallHistory.findOne({
+                caller_id: callerId,
+                status: 'ringing'
+            }).sort({ createdAt: -1 });
+            resolvedDeclinerId = ringingCall?.receiver_id?.toString() || '';
+            callRecordId = callRecordId || ringingCall?._id?.toString() || '';
+        }
+
+        // Emit to all caller sockets so every logged-in caller device updates.
         const io = req.app.get('socketio');
         if (io) {
-            const callerSocket = Array.from(io.sockets.sockets.values())
-                .find(s => s.data.userId === callerId);
+            const callerRoom = `user_${callerId}`;
+            const callerSockets = await io.in(callerRoom).fetchSockets();
 
-            if (callerSocket) {
-                callerSocket.emit('call-declined', { from: declinerId || 'background' });
-                logger.info(`[API] call-declined emitted to caller ${callerId} from ${declinerId || 'background'}`);
+            if (callerSockets.length > 0) {
+                io.to(callerRoom).emit('call-declined', { from: resolvedDeclinerId || 'background' });
+                logger.info(`[API] call-declined emitted to ${callerSockets.length} caller socket(s) for ${callerId} from ${resolvedDeclinerId || 'background'}`);
+
+                // Clear the server ring timeout so it doesn't also fire
+                for (const s of callerSockets) {
+                    if (s.data?.callRingTimeout) {
+                        clearTimeout(s.data.callRingTimeout);
+                        delete s.data.callRingTimeout;
+                    }
+                }
             } else {
                 logger.warn(`[API] Caller ${callerId} socket not found for call-declined (may have disconnected)`);
+            }
+
+            // Stop ringing on the decliner's other active devices.
+            if (resolvedDeclinerId) {
+                const declinerRoom = `user_${resolvedDeclinerId}`;
+                const declinerSockets = await io.in(declinerRoom).fetchSockets();
+                if (declinerSockets.length > 0) {
+                    io.to(declinerRoom).emit('call-cancel', { from: callerId });
+                    logger.info(`[API] call-cancel emitted to ${declinerSockets.length} decliner socket(s) for ${resolvedDeclinerId}`);
+                }
             }
         }
 
         // Mark any ringing call records as declined
-        await CallHistory.updateMany(
-            { caller_id: callerId, status: 'ringing' },
-            { status: 'declined', ended_at: new Date() }
-        );
+        if (callRecordId) {
+            await CallHistory.updateOne(
+                { _id: callRecordId },
+                { status: 'declined', ended_at: new Date() }
+            );
+        } else {
+            await CallHistory.updateMany(
+                { caller_id: callerId, status: 'ringing' },
+                { status: 'declined', ended_at: new Date() }
+            );
+        }
 
         res.json({ success: true });
     } catch (error) {
