@@ -72,7 +72,14 @@ app.use((req, res, next) => {
 // Database Connection
 connectDB();
 
-// Routes Application
+// ── Unauthenticated call-history endpoints (MUST come before invitation_routes
+//    because invitation_routes is mounted at /api with router.use(protect) which
+//    would otherwise intercept these requests and return 401) ───────────────────
+const call_history_ctrl = require('./controllers/call_history_controller');
+app.post('/api/call-history/decline', call_history_ctrl.decline_call);
+app.post('/api/call-history/answer', call_history_ctrl.answer_call);
+app.get('/api/call-history/check-active', call_history_ctrl.check_call_active);
+
 app.use('/api/push', push_notification_routes);
 app.use('/api/auth', auth_routes);
 app.use('/api/groups', group_routes);
