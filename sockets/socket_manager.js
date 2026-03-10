@@ -1,8 +1,29 @@
+const jwt = require('jsonwebtoken');
 const User = require('../models/user_model');
 
 const initializeSockets = (io) => {
+    // ── Socket JWT Authentication Middleware ──────────────────────────────────
+    // Reject connections that don't carry a valid JWT in handshake.auth.token.
+    // This prevents any anonymous client from connecting to the socket server.
+    io.use((socket, next) => {
+        const token = socket.handshake.auth?.token;
+        if (!token) {
+            return next(new Error('Authentication required: no token provided'));
+        }
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            // Pre-populate socket.data so we don't need to trust the client's
+            // register-user event for the user ID.
+            socket.data.userId = decoded.id;
+            socket.data.role = decoded.role || 'pilgrim';
+            next();
+        } catch (err) {
+            next(new Error('Authentication failed: invalid or expired token'));
+        }
+    });
+
     io.on('connection', (socket) => {
-        console.log(`[Socket] User connected: ${socket.id}`);
+        console.log(`[Socket] User connected: ${socket.id} (${socket.data.userId})`);
 
         // ── User Registration ──────────────────────────────────────────────────
         socket.on('register-user', async ({ userId, role }) => {
@@ -65,7 +86,7 @@ const initializeSockets = (io) => {
         });
 
         // ── Location Updates ───────────────────────────────────────────────────
-        socket.on('update_location', (data) => {
+        socket.on('update_location', async (data) => {
             const { groupId, pilgrimId, battery_percent } = data;
             if (groupId) {
                 socket.to(`group_${groupId}`).emit('location_update', data);
@@ -74,6 +95,24 @@ const initializeSockets = (io) => {
                     const pilgrimSocket = getSocketByUserId(pilgrimId);
                     if (pilgrimSocket) {
                         pilgrimSocket.emit('battery-update', { battery_percent, pilgrimId });
+                    }
+                }
+
+                // Persist last known location to DB so moderators see it on reload.
+                const userId = pilgrimId || socket.data.userId;
+                if (userId && data.latitude !== undefined && data.longitude !== undefined) {
+                    try {
+                        const updateData = {
+                            current_latitude: data.latitude,
+                            current_longitude: data.longitude,
+                            last_location_update: new Date(),
+                        };
+                        if (battery_percent !== undefined) {
+                            updateData.battery_percent = battery_percent;
+                        }
+                        await User.findByIdAndUpdate(userId, updateData);
+                    } catch (err) {
+                        console.error('[Socket] Error persisting location:', err);
                     }
                 }
             }
