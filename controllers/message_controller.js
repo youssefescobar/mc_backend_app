@@ -1,14 +1,22 @@
 const Message = require('../models/message_model');
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
+const mongoose = require('mongoose');
 const { sendPushNotification } = require('../services/pushNotificationService');
 const { translateText } = require('../services/translationService');
 const { logger } = require('../config/logger');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
 
 // Send a message (Text, Voice, Image, or TTS)
 exports.send_message = async (req, res) => {
     try {
         let { group_id, type, content, is_urgent, original_text } = req.body;
+        const safe_group_id = toObjectId(group_id);
+        const safe_sender_id = toObjectId(req.user.id);
         const file = req.file;
 
         // Parse is_urgent since FormData sends it as string "true"/"false"
@@ -17,7 +25,7 @@ exports.send_message = async (req, res) => {
         }
 
         // Validation
-        if (!group_id) {
+        if (!safe_group_id || !safe_sender_id) {
             return res.status(400).json({ message: "Group ID is required" });
         }
 
@@ -36,8 +44,8 @@ exports.send_message = async (req, res) => {
         const sender_model = 'User';
 
         const message = await Message.create({
-            group_id,
-            sender_id: req.user.id,
+            group_id: safe_group_id,
+            sender_id: safe_sender_id,
             sender_model,
             type: type || 'text',
             content,
@@ -53,12 +61,12 @@ exports.send_message = async (req, res) => {
         // --- Socket.io Broadcasting ---
         const io = req.app.get('socketio');
         if (io) {
-            io.to(`group_${group_id}`).emit('new_message', message);
+            io.to(`group_${safe_group_id}`).emit('new_message', message);
         }
 
         // --- Push Notification ---
         // Find all pilgrims in the group (excluding sender)
-        const group = await Group.findById(group_id);
+        const group = await Group.findById(safe_group_id);
         if (group) {
             const recipientIds = group.pilgrim_ids.filter(id => id.toString() !== req.user.id);
             const pilgrims = await User.find({
@@ -87,7 +95,7 @@ exports.send_message = async (req, res) => {
                         translateText(originalBody, lang)
                     ]);
                     return sendPushNotification(tokens, translatedTitle, translatedBody, {
-                        group_id,
+                        group_id: safe_group_id,
                         group_name: group.group_name,
                         type: 'new_message',
                         messageType: type,
@@ -114,6 +122,9 @@ exports.send_message = async (req, res) => {
 exports.send_individual_message = async (req, res) => {
     try {
         let { group_id, recipient_id, type, content, is_urgent, original_text } = req.body;
+        const safe_group_id = toObjectId(group_id);
+        const safe_recipient_id = toObjectId(recipient_id);
+        const safe_sender_id = toObjectId(req.user.id);
         const file = req.file;
 
         // Parse is_urgent since FormData sends it as string "true"/"false"
@@ -121,11 +132,11 @@ exports.send_individual_message = async (req, res) => {
             is_urgent = is_urgent === 'true';
         }
 
-        if (!group_id || !recipient_id) {
+        if (!safe_group_id || !safe_recipient_id || !safe_sender_id) {
             return res.status(400).json({ message: "Group ID and recipient ID are required" });
         }
 
-        const group = await Group.findById(group_id);
+        const group = await Group.findById(safe_group_id);
         if (!group) {
             return res.status(404).json({ message: "Group not found" });
         }
@@ -136,7 +147,7 @@ exports.send_individual_message = async (req, res) => {
             return res.status(403).json({ message: "Not authorized to send messages in this group" });
         }
 
-        const isRecipientInGroup = group.pilgrim_ids.some(id => id.toString() === recipient_id);
+        const isRecipientInGroup = group.pilgrim_ids.some(id => id.toString() === safe_recipient_id.toString());
         if (!isRecipientInGroup) {
             return res.status(400).json({ message: "Recipient is not in this group" });
         }
@@ -152,9 +163,9 @@ exports.send_individual_message = async (req, res) => {
         const sender_model = 'User';
 
         const message = await Message.create({
-            group_id,
-            recipient_id,
-            sender_id: req.user.id,
+            group_id: safe_group_id,
+            recipient_id: safe_recipient_id,
+            sender_id: safe_sender_id,
             sender_model,
             type: type || 'text',
             content,
@@ -173,11 +184,11 @@ exports.send_individual_message = async (req, res) => {
         // OR emit to specific socket ID if we tracked it.
         // For now, emit to group room and frontend filters by recipient_id
         if (io) {
-            io.to(`group_${group_id}`).emit('new_message', message);
+            io.to(`group_${safe_group_id}`).emit('new_message', message);
         }
 
         // --- Push Notification ---
-        const recipient = await User.findById(recipient_id).select('fcm_token language');
+        const recipient = await User.findById(safe_recipient_id).select('fcm_token language');
         if (recipient && recipient.fcm_token) {
             const lang = recipient.language || 'en';
             const title = is_urgent ? 'URGENT: Personal Message' : 'New Personal Message';
@@ -191,16 +202,16 @@ exports.send_individual_message = async (req, res) => {
             ]);
 
             sendPushNotification([recipient.fcm_token], translatedTitle, translatedBody, {
-                group_id,
+                group_id: safe_group_id,
                 group_name: group.group_name,
-                recipient_id,
+                recipient_id: safe_recipient_id,
                 type: 'new_message',
                 messageType: type,
                 message_id: message._id.toString()
             }, is_urgent);
         }
 
-        logger.info(`Individual message sent to ${recipient_id} by ${req.user.id}`);
+        logger.info(`Individual message sent to ${safe_recipient_id} by ${req.user.id}`);
 
         res.status(201).json({
             success: true,
@@ -215,11 +226,15 @@ exports.send_individual_message = async (req, res) => {
 // Get messages for a group
 exports.get_group_messages = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        const safe_user_id = toObjectId(req.user.id);
         const { limit = 50, before } = req.query; // Pagination using timestamp
+        if (!group_id || !safe_user_id) {
+            return res.status(400).json({ message: "Invalid group or user ID" });
+        }
 
         const query = req.user.user_type === 'pilgrim'
-            ? { group_id, $or: [{ recipient_id: null }, { recipient_id: req.user.id }] }
+            ? { group_id, $or: [{ recipient_id: null }, { recipient_id: safe_user_id }] }
             : { group_id };
         if (before) {
             query.created_at = { $lt: new Date(before) };
@@ -244,7 +259,10 @@ exports.get_group_messages = async (req, res) => {
 // Delete a message (moderators only)
 exports.delete_message = async (req, res) => {
     try {
-        const { message_id } = req.params;
+        const message_id = toObjectId(req.params.message_id);
+        if (!message_id) {
+            return res.status(400).json({ message: "Invalid message ID" });
+        }
 
         const message = await Message.findById(message_id);
         if (!message) {
@@ -305,8 +323,11 @@ exports.delete_message = async (req, res) => {
 // Get unread message count for a pilgrim in a group
 exports.get_unread_count = async (req, res) => {
     try {
-        const { group_id } = req.params;
-        const pilgrimId = req.user.id;
+        const group_id = toObjectId(req.params.group_id);
+        const pilgrimId = toObjectId(req.user.id);
+        if (!group_id || !pilgrimId) {
+            return res.status(400).json({ message: "Invalid group or user ID" });
+        }
 
         const count = await Message.countDocuments({
             group_id,
@@ -324,8 +345,11 @@ exports.get_unread_count = async (req, res) => {
 // Mark all messages in a group as read for this pilgrim
 exports.mark_read = async (req, res) => {
     try {
-        const { group_id } = req.params;
-        const pilgrimId = req.user.id;
+        const group_id = toObjectId(req.params.group_id);
+        const pilgrimId = toObjectId(req.user.id);
+        if (!group_id || !pilgrimId) {
+            return res.status(400).json({ message: "Invalid group or user ID" });
+        }
 
         await Message.updateMany(
             {

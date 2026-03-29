@@ -1,14 +1,22 @@
 const CommunicationSession = require('../models/communication_session_model');
 const Group = require('../models/group_model');
+const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const { sendSuccess, sendError, sendServerError } = require('../utils/response_helpers');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
 
 // Start a new communication session
 exports.start_session = async (req, res) => {
     try {
         const { group_id, type } = req.body;
+        const safe_group_id = toObjectId(group_id);
+        const safe_user_id = toObjectId(req.user.id);
 
-        if (!group_id || !type) {
+        if (!safe_group_id || !safe_user_id || !type) {
             return sendError(res, 400, 'Group ID and session type are required');
         }
 
@@ -18,10 +26,10 @@ exports.start_session = async (req, res) => {
 
         // Verify group membership
         const group = await Group.findOne({
-            _id: group_id,
+            _id: safe_group_id,
             $or: [
-                { pilgrim_ids: req.user.id },
-                { moderator_ids: req.user.id }
+                { pilgrim_ids: safe_user_id },
+                { moderator_ids: safe_user_id }
             ]
         });
 
@@ -30,12 +38,12 @@ exports.start_session = async (req, res) => {
         }
 
         const session = await CommunicationSession.create({
-            group_id,
-            initiator_id: req.user.id,
+            group_id: safe_group_id,
+            initiator_id: safe_user_id,
             initiator_model: 'User',
             type,
             participants: [{
-                user_id: req.user.id,
+                user_id: safe_user_id,
                 user_model: 'User'
             }]
         });
@@ -55,9 +63,10 @@ exports.start_session = async (req, res) => {
 // Join an active session
 exports.join_session = async (req, res) => {
     try {
-        const { session_id } = req.body;
+        const session_id = toObjectId(req.body.session_id);
+        const safe_user_id = toObjectId(req.user.id);
 
-        if (!session_id) {
+        if (!session_id || !safe_user_id) {
             return sendError(res, 400, 'Session ID is required');
         }
 
@@ -75,8 +84,8 @@ exports.join_session = async (req, res) => {
         const group = await Group.findOne({
             _id: existingSession.group_id,
             $or: [
-                { pilgrim_ids: req.user.id },
-                { moderator_ids: req.user.id }
+                { pilgrim_ids: safe_user_id },
+                { moderator_ids: safe_user_id }
             ]
         });
 
@@ -90,7 +99,7 @@ exports.join_session = async (req, res) => {
             {
                 $addToSet: {
                     participants: {
-                        user_id: req.user.id,
+                        user_id: safe_user_id,
                         user_model: 'User'
                     }
                 }
@@ -110,7 +119,7 @@ exports.join_session = async (req, res) => {
 // End a communication session
 exports.end_session = async (req, res) => {
     try {
-        const { session_id } = req.body;
+        const session_id = toObjectId(req.body.session_id);
 
         if (!session_id) {
             return sendError(res, 400, 'Session ID is required');
@@ -155,9 +164,10 @@ exports.end_session = async (req, res) => {
 // Get all active sessions for a group
 exports.get_active_sessions = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        const safe_user_id = toObjectId(req.user.id);
 
-        if (!group_id) {
+        if (!group_id || !safe_user_id) {
             return sendError(res, 400, 'Group ID is required');
         }
 
@@ -165,8 +175,8 @@ exports.get_active_sessions = async (req, res) => {
         const group = await Group.findOne({
             _id: group_id,
             $or: [
-                { pilgrim_ids: req.user.id },
-                { moderator_ids: req.user.id }
+                { pilgrim_ids: safe_user_id },
+                { moderator_ids: safe_user_id }
             ]
         });
 

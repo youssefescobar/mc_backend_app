@@ -6,9 +6,17 @@ const ModeratorRequest = require('../models/moderator_request_model');
 const Notification = require('../models/notification_model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
 const { logger } = require('../config/logger');
 const { sendSuccess, sendError, sendValidationError, sendServerError, JWT_EXPIRATION } = require('../utils/response_helpers');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
+
+const normalizeString = (value) => String(value || '').trim();
 
 /**
  * Register a new pilgrim account (public signup)
@@ -80,8 +88,9 @@ exports.register_user = async (req, res) => {
 exports.verify_email = async (req, res) => {
     try {
         const { email, code } = req.body;
+        const safe_email = normalizeString(email).toLowerCase();
 
-        const pending_user = await PendingUser.findOne({ email });
+        const pending_user = await PendingUser.findOne({ email: safe_email });
 
         if (!pending_user) {
             return sendError(res, 400, 'No pending registration found. Please register again.');
@@ -101,7 +110,7 @@ exports.verify_email = async (req, res) => {
         });
 
         // Delete pending user
-        await PendingUser.deleteOne({ email });
+        await PendingUser.deleteOne({ email: safe_email });
 
         logger.info(`Email verified and Moderator created: ${user.email} (${user._id})`);
 
@@ -117,8 +126,9 @@ exports.verify_email = async (req, res) => {
 exports.resend_verification = async (req, res) => {
     try {
         const { email } = req.body;
+        const safe_email = normalizeString(email).toLowerCase();
 
-        const pending_user = await PendingUser.findOne({ email });
+        const pending_user = await PendingUser.findOne({ email: safe_email });
 
         if (!pending_user) {
             return sendError(res, 400, 'No pending registration found. Please register again.');
@@ -133,9 +143,9 @@ exports.resend_verification = async (req, res) => {
         await pending_user.save();
 
         // Send new verification email asynchronously
-        sendVerificationEmail(email, verification_code, pending_user.full_name)
-            .then(() => logger.info(`Verification email resent to ${email}`))
-            .catch(err => logger.error(`Failed to resend verification email to ${email}: ${err.message}`));
+        sendVerificationEmail(safe_email, verification_code, pending_user.full_name)
+            .then(() => logger.info(`Verification email resent to ${safe_email}`))
+            .catch(err => logger.error(`Failed to resend verification email to ${safe_email}: ${err.message}`));
 
         sendSuccess(res, 200, 'Verification code resent to email');
     } catch (error) {
@@ -225,7 +235,10 @@ exports.login_user = async (req, res) => {
  */
 exports.logout_user = async (req, res) => {
     try {
-        const user_id = req.user.id;
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) {
+            return sendError(res, 400, 'Invalid user identifier');
+        }
 
         await User.findByIdAndUpdate(user_id, { 
             fcm_token: null,
@@ -259,7 +272,12 @@ exports.logout_user = async (req, res) => {
  */
 exports.refresh_session = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('_id full_name user_type');
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) {
+            return sendError(res, 400, 'Invalid user identifier');
+        }
+
+        const user = await User.findById(user_id).select('_id full_name user_type');
 
         if (!user) {
             return sendError(res, 404, 'User not found');
@@ -429,7 +447,7 @@ exports.register_pilgrim = async (req, res) => {
             gender,
             password: hashed_password,
             user_type: 'pilgrim',
-            created_by: req.user.id
+            created_by: toObjectId(req.user.id)
         });
 
         logger.info(`Pilgrim manually registered by moderator: ${pilgrim._id}`);
@@ -445,17 +463,19 @@ exports.register_pilgrim = async (req, res) => {
  */
 exports.search_pilgrims = async (req, res) => {
     try {
-        const { query } = req.query;
+        const query_text = normalizeString(req.query.query);
 
-        if (!query) {
+        if (!query_text) {
             return sendError(res, 400, 'Search query required');
         }
+
+        const escaped_query = query_text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
         const pilgrims = await User.find({
             user_type: 'pilgrim',
             $or: [
-                { full_name: { $regex: query, $options: 'i' } },
-                { national_id: { $regex: query, $options: 'i' } }
+                { full_name: { $regex: escaped_query, $options: 'i' } },
+                { national_id: { $regex: escaped_query, $options: 'i' } }
             ]
         }).select('full_name national_id phone_number gender age').lean();
 
@@ -470,7 +490,10 @@ exports.search_pilgrims = async (req, res) => {
  */
 exports.get_pilgrim_by_id = async (req, res) => {
     try {
-        const { pilgrim_id } = req.params;
+        const pilgrim_id = toObjectId(req.params.pilgrim_id);
+        if (!pilgrim_id) {
+            return sendError(res, 400, 'Invalid pilgrim identifier');
+        }
 
         const query = { _id: pilgrim_id };
         

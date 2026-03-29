@@ -1,10 +1,17 @@
 const CallHistory = require('../models/call_history_model');
+const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
 
 // Get call history for current user
 exports.get_call_history = async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = toObjectId(req.user.id);
+        if (!userId) return res.status(400).json({ success: false, message: 'Invalid user identifier' });
 
         // Find calls where user is either caller or receiver
         const calls = await CallHistory.find({
@@ -30,13 +37,17 @@ exports.get_call_history = async (req, res) => {
 exports.create_call_record = async (req, res) => {
     try {
         const { receiver_id, receiver_model, call_type } = req.body;
-        const caller_id = req.user.id;
+        const caller_id = toObjectId(req.user.id);
+        const safe_receiver_id = toObjectId(receiver_id);
+        if (!caller_id || !safe_receiver_id) {
+            return res.status(400).json({ success: false, message: 'Invalid caller or receiver identifier' });
+        }
         const caller_model = 'User';
 
         const callRecord = new CallHistory({
             caller_id,
             caller_model,
-            receiver_id,
+            receiver_id: safe_receiver_id,
             receiver_model: 'User',
             call_type: call_type || 'internet',
             status: 'ringing'
@@ -53,7 +64,8 @@ exports.create_call_record = async (req, res) => {
 // Get unread missed call count
 exports.get_unread_count = async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = toObjectId(req.user.id);
+        if (!userId) return res.status(400).json({ success: false, message: 'Invalid user identifier' });
         const count = await CallHistory.countDocuments({
             receiver_id: userId,
             status: 'missed',
@@ -69,7 +81,8 @@ exports.get_unread_count = async (req, res) => {
 // Mark all missed calls as read
 exports.mark_read = async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = toObjectId(req.user.id);
+        if (!userId) return res.status(400).json({ success: false, message: 'Invalid user identifier' });
         await CallHistory.updateMany(
             { receiver_id: userId, status: 'missed', is_read: false },
             { is_read: true }
@@ -85,7 +98,7 @@ exports.mark_read = async (req, res) => {
 // hasn't been cancelled before joining the Agora channel.
 exports.check_call_active = async (req, res) => {
     try {
-        const { callerId } = req.query;
+        const callerId = toObjectId(req.query.callerId);
         if (!callerId) {
             return res.json({ active: false, status: 'none' });
         }
@@ -109,7 +122,8 @@ exports.check_call_active = async (req, res) => {
 // Answer a call from background/killed state (REST fallback when socket isn't connected)
 exports.answer_call = async (req, res) => {
     try {
-        const { callerId, answererId } = req.body;
+        const callerId = toObjectId(req.body.callerId);
+        const answererId = toObjectId(req.body.answererId);
         logger.info(`[API] /call-history/answer hit: callerId=${callerId || ''}, answererId=${answererId || ''}`);
         if (!callerId) return res.status(400).json({ success: false, message: 'callerId required' });
 
@@ -117,11 +131,11 @@ exports.answer_call = async (req, res) => {
         const io = req.app.get('socketio');
         if (io) {
             const callerSocket = Array.from(io.sockets.sockets.values())
-                .find(s => s.data.userId === callerId);
+                .find(s => s.data.userId === callerId.toString());
 
             if (callerSocket) {
-                callerSocket.emit('call-answer', { from: answererId || 'background' });
-                logger.info(`[API] call-answer emitted to caller ${callerId} from ${answererId || 'background'}`);
+                callerSocket.emit('call-answer', { from: answererId?.toString() || 'background' });
+                logger.info(`[API] call-answer emitted to caller ${callerId} from ${answererId?.toString() || 'background'}`);
             } else {
                 logger.warn(`[API] Caller ${callerId} socket not found for call-answer (may have disconnected)`);
             }
@@ -143,22 +157,24 @@ exports.answer_call = async (req, res) => {
 // Decline a call from background/killed state (REST fallback when socket isn't connected)
 exports.decline_call = async (req, res) => {
     try {
-        let { callerId, declinerId, callRecordId } = req.body;
+        let callerId = toObjectId(req.body.callerId);
+        let declinerId = toObjectId(req.body.declinerId);
+        let callRecordId = toObjectId(req.body.callRecordId);
         logger.info(`[API] /call-history/decline hit: callerId=${callerId || ''}, declinerId=${declinerId || ''}, callRecordId=${callRecordId || ''}`);
 
         // Resolve decliner from payload when present, otherwise infer from the
         // most recent ringing call record.
-        let resolvedDeclinerId = declinerId || '';
+        let resolvedDeclinerId = declinerId || null;
 
         if ((!callerId || !resolvedDeclinerId) && callRecordId) {
             const callRecord = await CallHistory.findById(callRecordId)
                 .select('caller_id receiver_id status');
             if (callRecord) {
-                callerId = callerId || callRecord.caller_id?.toString() || '';
+                callerId = callerId || callRecord.caller_id || null;
                 resolvedDeclinerId =
                     resolvedDeclinerId ||
-                    callRecord.receiver_id?.toString() ||
-                    '';
+                    callRecord.receiver_id ||
+                    null;
             }
         }
 
@@ -171,19 +187,19 @@ exports.decline_call = async (req, res) => {
                 caller_id: callerId,
                 status: 'ringing'
             }).sort({ createdAt: -1 });
-            resolvedDeclinerId = ringingCall?.receiver_id?.toString() || '';
-            callRecordId = callRecordId || ringingCall?._id?.toString() || '';
+            resolvedDeclinerId = ringingCall?.receiver_id || null;
+            callRecordId = callRecordId || ringingCall?._id || null;
         }
 
         // Emit to all caller sockets so every logged-in caller device updates.
         const io = req.app.get('socketio');
         if (io) {
-            const callerRoom = `user_${callerId}`;
+            const callerRoom = `user_${callerId.toString()}`;
             const callerSockets = await io.in(callerRoom).fetchSockets();
 
             if (callerSockets.length > 0) {
-                io.to(callerRoom).emit('call-declined', { from: resolvedDeclinerId || 'background' });
-                logger.info(`[API] call-declined emitted to ${callerSockets.length} caller socket(s) for ${callerId} from ${resolvedDeclinerId || 'background'}`);
+                io.to(callerRoom).emit('call-declined', { from: resolvedDeclinerId?.toString() || 'background' });
+                logger.info(`[API] call-declined emitted to ${callerSockets.length} caller socket(s) for ${callerId} from ${resolvedDeclinerId?.toString() || 'background'}`);
 
                 // Clear the server ring timeout so it doesn't also fire
                 for (const s of callerSockets) {
@@ -198,10 +214,10 @@ exports.decline_call = async (req, res) => {
 
             // Stop ringing on the decliner's other active devices.
             if (resolvedDeclinerId) {
-                const declinerRoom = `user_${resolvedDeclinerId}`;
+                const declinerRoom = `user_${resolvedDeclinerId.toString()}`;
                 const declinerSockets = await io.in(declinerRoom).fetchSockets();
                 if (declinerSockets.length > 0) {
-                    io.to(declinerRoom).emit('call-cancel', { from: callerId });
+                    io.to(declinerRoom).emit('call-cancel', { from: callerId.toString() });
                     logger.info(`[API] call-cancel emitted to ${declinerSockets.length} decliner socket(s) for ${resolvedDeclinerId}`);
                 }
             }
