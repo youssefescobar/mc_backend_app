@@ -20,36 +20,22 @@ jobs:
           workload_identity_provider: 'projects/199324116788/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
           service_account: 'github-deployer@munawware-care.iam.gserviceaccount.com'
 
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v2'
-        with:
-          project_id: 'munawware-care'
+      # We REMOVED setup-gcloud because 'auth' handles it automatically now.
+      # The gcloud commands below will use the credentials from the step above.
 
       - name: 'Generate Cloud Run Env YAML'
         run: |
-          # 1. Get secret content
           echo "${{ secrets.ENV_FILE_CONTENT }}" > .env.tmp
-          
-          # 2. Process .env into YAML (Same logic as your PS script)
           echo "# Generated Environment Variables" > _cloudrun_env.yaml
           while IFS='=' read -r key value || [ -n "$key" ]; do
-            # Handle CRLF line endings from secret content
             key="${key%$'\r'}"
             value="${value%$'\r'}"
-
-            # Skip comments and empty lines
             [[ "$key" =~ ^#.*$ ]] && continue
             [[ -z "$key" ]] && continue
-            
-            # Skip PORT (Reserved by Cloud Run)
             [[ "$key" == "PORT" ]] && continue
-            
-            # Override BASE_URL for Munawwara Care
             if [[ "$key" == "BASE_URL" ]]; then
               value="https://mcbackendapp-199324116788.europe-west8.run.app"
             fi
-            
-            # Escape single quotes for YAML and append
             value_escaped=$(echo "$value" | sed "s/'/''/g")
             echo "$key: '$value_escaped'" >> _cloudrun_env.yaml
           done < .env.tmp
