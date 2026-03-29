@@ -20,9 +20,9 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
     }
 
     // Determine if we should use Data-Only (Silent) payload.
-    // We ONLY want Data-Only for "Urgent TTS" messages so the app can control the "Sound -> TTS -> Sound" sequence.
+    // We ONLY want Data-Only for "Urgent TTS" / "Reminder TTS" messages so the app can control the "Sound -> TTS -> Sound" sequence.
     // For other urgent messages (Text, Voice Note) or normal messages, we want standard system notifications.
-    const isUrgentTTS = isUrgent && data.messageType === 'tts';
+    const isUrgentTTS = isUrgent && (data.messageType === 'tts' || data.messageType === 'reminder_tts');
     const isIncomingCall = data.type === 'incoming_call';
     const isCallCancel = data.type === 'call_cancel';
 

@@ -1,8 +1,8 @@
 const Message = require('../models/message_model');
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
-// User model not used directly here
 const { sendPushNotification } = require('../services/pushNotificationService');
+const { translateText } = require('../services/translationService');
 const { logger } = require('../config/logger');
 
 // Send a message (Text, Voice, Image, or TTS)
@@ -65,22 +65,35 @@ exports.send_message = async (req, res) => {
                 _id: { $in: recipientIds },
                 user_type: 'pilgrim',
                 fcm_token: { $ne: null }
-            }).select('fcm_token');
+            }).select('fcm_token language');
 
-            const tokens = pilgrims.map(p => p.fcm_token);
-            if (tokens.length > 0) {
+            if (pilgrims.length > 0) {
                 const title = is_urgent ? 'URGENT: New Broadcast' : 'New Message';
-                const body = type === 'text' || type === 'tts'
+                const originalBody = type === 'text' || type === 'tts'
                     ? (content.length > 50 ? content.substring(0, 50) + '...' : content)
                     : `Sent a ${type} message`;
 
-                sendPushNotification(tokens, title, body, {
-                    group_id,
-                    group_name: group.group_name,
-                    type: 'new_message',
-                    messageType: type, // Pass 'text', 'tts', 'voice', etc.
-                    message_id: message._id.toString()
-                }, is_urgent);
+                // Group recipients by language, then translate once per language group
+                const byLang = {};
+                for (const p of pilgrims) {
+                    const lang = p.language || 'en';
+                    if (!byLang[lang]) byLang[lang] = [];
+                    byLang[lang].push(p.fcm_token);
+                }
+
+                await Promise.all(Object.entries(byLang).map(async ([lang, tokens]) => {
+                    const [translatedTitle, translatedBody] = await Promise.all([
+                        translateText(title, lang),
+                        translateText(originalBody, lang)
+                    ]);
+                    return sendPushNotification(tokens, translatedTitle, translatedBody, {
+                        group_id,
+                        group_name: group.group_name,
+                        type: 'new_message',
+                        messageType: type,
+                        message_id: message._id.toString()
+                    }, is_urgent);
+                }));
             }
         }
 
@@ -164,19 +177,25 @@ exports.send_individual_message = async (req, res) => {
         }
 
         // --- Push Notification ---
-        const recipient = await User.findById(recipient_id).select('fcm_token');
+        const recipient = await User.findById(recipient_id).select('fcm_token language');
         if (recipient && recipient.fcm_token) {
+            const lang = recipient.language || 'en';
             const title = is_urgent ? 'URGENT: Personal Message' : 'New Personal Message';
-            const body = type === 'text' || type === 'tts'
+            const originalBody = type === 'text' || type === 'tts'
                 ? (content.length > 50 ? content.substring(0, 50) + '...' : content)
                 : `Sent you a ${type} message`;
 
-            sendPushNotification([recipient.fcm_token], title, body, {
+            const [translatedTitle, translatedBody] = await Promise.all([
+                translateText(title, lang),
+                translateText(originalBody, lang)
+            ]);
+
+            sendPushNotification([recipient.fcm_token], translatedTitle, translatedBody, {
                 group_id,
                 group_name: group.group_name,
                 recipient_id,
                 type: 'new_message',
-                messageType: type, // Pass 'text', 'tts', 'voice', etc.
+                messageType: type,
                 message_id: message._id.toString()
             }, is_urgent);
         }
