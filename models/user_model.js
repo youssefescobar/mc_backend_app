@@ -22,7 +22,7 @@ const user_schema = new mongoose.Schema({
         unique: true,
         lowercase: true,
         trim: true,
-        match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ // Basic email validation
+        match: /^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/ // ReDoS-safe email validation
     },
     email_verified: { 
         type: Boolean, 

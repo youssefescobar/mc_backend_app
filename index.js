@@ -13,6 +13,7 @@ const connectDB = require('./config/db');
 const { disconnectDB } = require('./config/db');
 const { http_logger, logger } = require('./config/logger');
 const { initializeSockets } = require('./sockets/socket_manager');
+const sanitize_request = require('./middleware/sanitize_middleware');
 
 // Routes
 const auth_routes = require('./routes/auth_routes');
@@ -60,6 +61,7 @@ app.use(cors({
 // Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(sanitize_request);
 
 // Static files
 app.use('/uploads', express.static('uploads'));

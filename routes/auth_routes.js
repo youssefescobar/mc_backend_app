@@ -7,12 +7,16 @@ const validate = require('../middleware/validation_middleware');
 const {
     register_schema,
     login_schema,
+    register_invited_pilgrim_schema,
     update_profile_schema,
+    update_location_schema,
+    update_fcm_token_schema,
     add_email_schema,
     verify_pilgrim_email_schema,
     request_moderator_schema,
     update_language_schema,
-    register_pilgrim_schema
+    register_pilgrim_schema,
+    pilgrim_id_param_schema
 } = require('../middleware/schemas');
 const { authLimiter, loginLimiter, registerLimiter, searchLimiter } = require('../middleware/rate_limit');
 const upload = require('../middleware/upload_middleware');
@@ -21,7 +25,7 @@ const upload = require('../middleware/upload_middleware');
 // Public Routes
 // ==========================================
 router.post('/register', registerLimiter, validate(register_schema), auth_ctrl.register_user);
-router.post('/register-invited-pilgrim', registerLimiter, auth_ctrl.register_invited_pilgrim);
+router.post('/register-invited-pilgrim', registerLimiter, validate(register_invited_pilgrim_schema), auth_ctrl.register_invited_pilgrim);
 router.post('/login', loginLimiter, validate(login_schema), auth_ctrl.login_user);
 
 // ==========================================
@@ -36,8 +40,8 @@ router.get('/me', profile_ctrl.get_profile);
 router.put('/update-profile', validate(update_profile_schema), profile_ctrl.update_profile);
 router.put('/update-language', validate(update_language_schema), profile_ctrl.update_language);
 router.post('/translate', profile_ctrl.translate);
-router.put('/location', profile_ctrl.update_location);
-router.put('/fcm-token', profile_ctrl.update_fcm_token);
+router.put('/location', validate(update_location_schema), profile_ctrl.update_location);
+router.put('/fcm-token', validate(update_fcm_token_schema), profile_ctrl.update_fcm_token);
 
 // Email Verification
 router.post('/add-email', validate(add_email_schema), profile_ctrl.add_email);
@@ -56,6 +60,6 @@ const modAuth = authorize('moderator', 'admin');
 
 router.post('/register-pilgrim', modAuth, validate(register_pilgrim_schema), auth_ctrl.register_pilgrim);
 router.get('/search-pilgrims', modAuth, searchLimiter, auth_ctrl.search_pilgrims);
-router.get('/pilgrims/:pilgrim_id', modAuth, auth_ctrl.get_pilgrim_by_id);
+router.get('/pilgrims/:pilgrim_id', modAuth, validate(pilgrim_id_param_schema, 'params'), auth_ctrl.get_pilgrim_by_id);
 
 module.exports = router;

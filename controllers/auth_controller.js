@@ -326,9 +326,14 @@ exports.refresh_session = async (req, res) => {
 exports.register_invited_pilgrim = async (req, res) => {
     try {
         const { full_name, password, token } = req.body;
+        const safe_token = typeof token === 'string' ? token.trim() : '';
+
+        if (!safe_token) {
+            return sendError(res, 400, 'Invitation token is required');
+        }
 
         // Validate Token
-        const pending_pilgrim = await PendingPilgrim.findOne({ verification_token: token });
+        const pending_pilgrim = await PendingPilgrim.findOne({ verification_token: safe_token });
 
         if (!pending_pilgrim) {
             return sendError(res, 400, 'Invalid or expired invitation token');

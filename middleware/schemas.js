@@ -12,6 +12,7 @@ const GENDERS = ['male', 'female', 'other'];
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d@$!%*?&]{8,}$/;
 const PASSWORD_MESSAGE = 'Password must be at least 8 characters with at least one uppercase letter, one lowercase letter, and one number';
+const OBJECT_ID_PATTERN = /^[a-fA-F0-9]{24}$/;
 
 // Simple password for backward compatibility (used where users can't set complex passwords)
 const SIMPLE_PASSWORD_MIN = 6;
@@ -88,7 +89,7 @@ exports.register_invited_pilgrim_schema = Joi.object({
         'string.min': PASSWORD_MESSAGE,
         'string.pattern.base': PASSWORD_MESSAGE
     }),
-    token: Joi.string().required().messages({
+    token: Joi.string().trim().max(512).required().messages({
         'any.required': 'Invitation token is required'
     })
 });
@@ -255,5 +256,79 @@ exports.verify_pilgrim_email_schema = Joi.object({
 
 exports.request_moderator_schema = Joi.object({
     // No body needed, uses authenticated pilgrim's verified email
+});
+
+/**
+ * Route Param and Query Validation
+ */
+
+exports.group_id_param_schema = Joi.object({
+    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.user_id_param_schema = Joi.object({
+    user_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.pilgrim_id_param_schema = Joi.object({
+    pilgrim_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.message_id_param_schema = Joi.object({
+    message_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.notification_id_param_schema = Joi.object({
+    id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.invitation_id_param_schema = Joi.object({
+    id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.area_id_param_schema = Joi.object({
+    area_id: Joi.string().pattern(OBJECT_ID_PATTERN).required(),
+    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.reminder_id_param_schema = Joi.object({
+    id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.join_group_schema = Joi.object({
+    group_code: Joi.string().trim().required().max(32)
+});
+
+exports.group_id_query_schema = Joi.object({
+    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.call_active_query_schema = Joi.object({
+    callerId: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+}).unknown(true);
+
+exports.answer_call_schema = Joi.object({
+    callerId: Joi.string().pattern(OBJECT_ID_PATTERN).required(),
+    answererId: Joi.string().pattern(OBJECT_ID_PATTERN).optional().allow('')
+});
+
+exports.decline_call_schema = Joi.object({
+    callerId: Joi.string().pattern(OBJECT_ID_PATTERN).optional().allow(''),
+    declinerId: Joi.string().pattern(OBJECT_ID_PATTERN).optional().allow(''),
+    callRecordId: Joi.string().pattern(OBJECT_ID_PATTERN).optional().allow('')
+}).or('callerId', 'callRecordId');
+
+exports.create_reminder_schema = Joi.object({
+    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).required(),
+    target_type: Joi.string().valid('pilgrim', 'group').required(),
+    pilgrim_id: Joi.string().pattern(OBJECT_ID_PATTERN).when('target_type', {
+        is: 'pilgrim',
+        then: Joi.required(),
+        otherwise: Joi.optional().allow(null, '')
+    }),
+    text: Joi.string().trim().min(1).max(1000).required(),
+    scheduled_at: Joi.date().iso().required(),
+    repeat_count: Joi.number().integer().min(1).max(20).optional(),
+    repeat_interval_min: Joi.number().integer().min(1).max(1440).optional()
 });
 

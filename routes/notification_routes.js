@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth_middleware');
+const validate = require('../middleware/validation_middleware');
+const { notification_id_param_schema } = require('../middleware/schemas');
 const {
     get_notifications,
     mark_as_read,
@@ -20,7 +22,7 @@ router.get('/', get_notifications);
 router.get('/unread-count', get_unread_count);
 
 // Mark single notification as read
-router.put('/:id/read', mark_as_read);
+router.put('/:id/read', validate(notification_id_param_schema, 'params'), mark_as_read);
 
 // Mark all notifications as read
 router.put('/read-all', mark_all_read);
@@ -29,6 +31,6 @@ router.put('/read-all', mark_all_read);
 router.delete('/read', delete_read_notifications);
 
 // Delete single notification
-router.delete('/:id', delete_notification);
+router.delete('/:id', validate(notification_id_param_schema, 'params'), delete_notification);
 
 module.exports = router;
