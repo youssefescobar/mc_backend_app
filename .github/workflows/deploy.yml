@@ -1,0 +1,59 @@
+name: Deploy Munawwara Care
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write' # Required for Workload Identity
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          workload_identity_provider: 'projects/199324116788/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-deployer@munawware-care.iam.gserviceaccount.com'
+
+      - name: 'Generate Cloud Run Env YAML'
+        run: |
+          # 1. Get secret content
+          echo "${{ secrets.ENV_FILE_CONTENT }}" > .env.tmp
+          
+          # 2. Process .env into YAML (Same logic as your PS script)
+          echo "# Generated Environment Variables" > _cloudrun_env.yaml
+          while IFS='=' read -r key value || [ -n "$key" ]; do
+            # Skip comments and empty lines
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ -z "$key" ]] && continue
+            
+            # Skip PORT (Reserved by Cloud Run)
+            [[ "$key" == "PORT" ]] && continue
+            
+            # Override BASE_URL for Munawwara Care
+            if [[ "$key" == "BASE_URL" ]]; then
+              value="https://mcbackendapp-199324116788.europe-west8.run.app"
+            fi
+            
+            # Escape single quotes for YAML and append
+            value_escaped=$(echo "$value" | sed "s/'/''/g")
+            echo "$key: '$value_escaped'" >> _cloudrun_env.yaml
+          done < .env.tmp
+
+      - name: 'Deploy to Cloud Run'
+        run: |
+          gcloud run deploy mcbackendapp \
+            --source . \
+            --region europe-west8 \
+            --project munawware-care \
+            --allow-unauthenticated \
+            --timeout 3600 \
+            --min-instances 1 \
+            --max-instances 1 \
+            --session-affinity \
+            --env-vars-file _cloudrun_env.yaml
