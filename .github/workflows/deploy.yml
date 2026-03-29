@@ -1,7 +1,7 @@
 name: Deploy Munawwara Care
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master", "main" ]
 
 jobs:
   deploy:
