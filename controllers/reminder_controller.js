@@ -1,6 +1,12 @@
 const Reminder = require('../models/reminder_model');
+const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const scheduler = require('../services/reminderScheduler');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
 
 // ── Create Reminder ───────────────────────────────────────────────────────────
 exports.create_reminder = async (req, res) => {
@@ -15,10 +21,14 @@ exports.create_reminder = async (req, res) => {
             repeat_interval_min
         } = req.body;
 
-        if (!group_id || !target_type || !text || !scheduled_at) {
+        const safe_group_id = toObjectId(group_id);
+        const safe_pilgrim_id = pilgrim_id ? toObjectId(pilgrim_id) : null;
+        const safe_user_id = toObjectId(req.user.id);
+
+        if (!safe_group_id || !safe_user_id || !target_type || !text || !scheduled_at) {
             return res.status(400).json({ success: false, message: 'group_id, target_type, text and scheduled_at are required' });
         }
-        if (target_type === 'pilgrim' && !pilgrim_id) {
+        if (target_type === 'pilgrim' && !safe_pilgrim_id) {
             return res.status(400).json({ success: false, message: 'pilgrim_id is required when target_type is "pilgrim"' });
         }
         if (new Date(scheduled_at) <= new Date()) {
@@ -26,10 +36,10 @@ exports.create_reminder = async (req, res) => {
         }
 
         const reminder = await Reminder.create({
-            created_by: req.user.id,
-            group_id,
+            created_by: safe_user_id,
+            group_id: safe_group_id,
             target_type,
-            pilgrim_id: target_type === 'pilgrim' ? pilgrim_id : null,
+            pilgrim_id: target_type === 'pilgrim' ? safe_pilgrim_id : null,
             text: text.trim(),
             scheduled_at: new Date(scheduled_at),
             repeat_count: Math.min(Math.max(parseInt(repeat_count) || 1, 1), 20),
@@ -52,7 +62,7 @@ exports.create_reminder = async (req, res) => {
 // ── List Reminders for a Group ────────────────────────────────────────────────
 exports.get_reminders = async (req, res) => {
     try {
-        const { group_id } = req.query;
+        const group_id = toObjectId(req.query.group_id);
         if (!group_id) {
             return res.status(400).json({ success: false, message: 'group_id is required' });
         }
@@ -73,10 +83,14 @@ exports.get_reminders = async (req, res) => {
 // ── Cancel Reminder ───────────────────────────────────────────────────────────
 exports.cancel_reminder = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = toObjectId(req.params.id);
+        const user_id = toObjectId(req.user.id);
+        if (!id || !user_id) {
+            return res.status(400).json({ success: false, message: 'Invalid reminder or user identifier' });
+        }
 
         const reminder = await Reminder.findOneAndUpdate(
-            { _id: id, created_by: req.user.id, status: { $in: ['pending', 'active'] } },
+            { _id: id, created_by: user_id, status: { $in: ['pending', 'active'] } },
             { status: 'cancelled' },
             { new: true }
         );
@@ -99,9 +113,13 @@ exports.cancel_reminder = async (req, res) => {
 // ── Hard Delete Reminder ──────────────────────────────────────────────────────
 exports.delete_reminder = async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = toObjectId(req.params.id);
+        const user_id = toObjectId(req.user.id);
+        if (!id || !user_id) {
+            return res.status(400).json({ success: false, message: 'Invalid reminder or user identifier' });
+        }
 
-        const reminder = await Reminder.findOneAndDelete({ _id: id, created_by: req.user.id });
+        const reminder = await Reminder.findOneAndDelete({ _id: id, created_by: user_id });
 
         if (!reminder) {
             return res.status(404).json({ success: false, message: 'Reminder not found' });

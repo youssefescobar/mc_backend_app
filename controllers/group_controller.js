@@ -4,13 +4,22 @@ const SuggestedArea = require('../models/suggested_area_model');
 const Notification = require('../models/notification_model');
 const Message = require('../models/message_model');
 const QRCode = require('qrcode');
+const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const { sendSuccess, sendError, sendServerError } = require('../utils/response_helpers');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
+
+const normalizeString = (value) => String(value || '').trim();
 
 // Get a single group by ID (moderator/admin only)
 exports.get_single_group = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         const group = await Group.findById(group_id)
             .populate('moderator_ids', 'full_name email')
@@ -66,12 +75,14 @@ exports.get_single_group = async (req, res) => {
 // 1. Create a group and assign the moderator
 exports.create_group = async (req, res) => {
     try {
-        const { group_name } = req.body;
+        const group_name = normalizeString(req.body.group_name);
+        const user_id = toObjectId(req.user.id);
+        if (!group_name || !user_id) return sendError(res, 400, 'Invalid request payload');
 
         // Check if this moderator already has a group with the same name
         const existing = await Group.findOne({
             group_name,
-            moderator_ids: req.user.id
+            moderator_ids: user_id
         });
 
         if (existing) {
@@ -91,8 +102,8 @@ exports.create_group = async (req, res) => {
         const new_group = await Group.create({
             group_name,
             group_code,
-            moderator_ids: [req.user.id], // The creator is the first moderator
-            created_by: req.user.id
+            moderator_ids: [user_id], // The creator is the first moderator
+            created_by: user_id
         });
 
         const group_obj = new_group.toObject();
@@ -107,7 +118,8 @@ exports.create_group = async (req, res) => {
 // Generate QR Code for a group
 exports.generate_group_qr = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         const group = await Group.findById(group_id);
         if (!group) {
@@ -143,9 +155,10 @@ exports.generate_group_qr = async (req, res) => {
 // 1.5 Join Group via Code
 exports.join_group = async (req, res) => {
     try {
-        const { group_code } = req.body;
+        const group_code = normalizeString(req.body.group_code).toUpperCase();
+        const user_id = toObjectId(req.user.id);
 
-        if (!group_code) {
+        if (!group_code || !user_id) {
             return sendError(res, 400, 'Group code is required');
         }
 
@@ -160,15 +173,15 @@ exports.join_group = async (req, res) => {
         }
 
         // Check if already in group
-        const is_member = group.pilgrim_ids.some(id => id.toString() === req.user.id) ||
-            group.moderator_ids.some(id => id.toString() === req.user.id);
+        const is_member = group.pilgrim_ids.some(id => id.toString() === user_id.toString()) ||
+            group.moderator_ids.some(id => id.toString() === user_id.toString());
 
         if (is_member) {
             return sendError(res, 400, 'You are already a member of this group');
         }
 
         // Add to pilgrim_ids
-        group.pilgrim_ids.push(req.user.id);
+        group.pilgrim_ids.push(user_id);
         await group.save();
 
         sendSuccess(res, 200, `Successfully joined group: ${group.group_name}`, {
@@ -197,7 +210,10 @@ exports.get_my_groups = async (req, res) => {
             return sendError(res, 401, 'User not authenticated');
         }
 
-        const query = { moderator_ids: req.user.id };
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
+        const query = { moderator_ids: user_id };
         const groups = await Group.find(query)
             .populate('moderator_ids', 'full_name email')
             .skip(skip)
@@ -274,7 +290,9 @@ exports.get_my_groups = async (req, res) => {
 // 4. Send Message to Group (for later Voice processing)
 exports.send_group_alert = async (req, res) => {
     try {
-        const { group_id, message_text } = req.body;
+        const group_id = toObjectId(req.body.group_id);
+        const message_text = normalizeString(req.body.message_text);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         // Validate group exists
         const group = await Group.findById(group_id);
@@ -296,7 +314,9 @@ exports.send_group_alert = async (req, res) => {
 // 4.5 Send Message to Individual Pilgrim
 exports.send_individual_alert = async (req, res) => {
     try {
-        const { user_id, message_text } = req.body;
+        const user_id = toObjectId(req.body.user_id);
+        const message_text = normalizeString(req.body.message_text);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
         // Validate pilgrim exists
         const pilgrim = await User.findById(user_id);
@@ -321,10 +341,11 @@ exports.send_individual_alert = async (req, res) => {
 // 5. Add pilgrim to group (Create if not exists)
 exports.add_pilgrim_to_group = async (req, res) => {
     try {
-        const { group_id } = req.params;
-        const { identifier } = req.body;
+        const group_id = toObjectId(req.params.group_id);
+        const identifier = normalizeString(req.body.identifier);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
-        if (!identifier || identifier.trim() === '') {
+        if (!identifier) {
             return sendError(res, 400, 'Email, phone number, or national ID is required');
         }
 
@@ -332,8 +353,8 @@ exports.add_pilgrim_to_group = async (req, res) => {
             user_type: 'pilgrim',
             $or: [
                 { email: identifier.trim().toLowerCase() },
-                { phone_number: identifier.trim() },
-                { national_id: identifier.trim() }
+                { phone_number: identifier },
+                { national_id: identifier }
             ]
         });
 
@@ -370,8 +391,9 @@ exports.add_pilgrim_to_group = async (req, res) => {
 // 6. Remove pilgrim from group
 exports.remove_pilgrim_from_group = async (req, res) => {
     try {
-        const { group_id } = req.params;
-        const { user_id } = req.body;
+        const group_id = toObjectId(req.params.group_id);
+        const user_id = toObjectId(req.body.user_id);
+        if (!group_id || !user_id) return sendError(res, 400, 'Invalid group or user identifier');
 
         const updated_group = await Group.findByIdAndUpdate(
             group_id,
@@ -407,7 +429,8 @@ exports.remove_pilgrim_from_group = async (req, res) => {
 // 7. Delete a group (unassigns all pilgrims automatically)
 exports.delete_group = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         // Verify the user is a moderator of this group
         const group = await Group.findById(group_id);
@@ -430,7 +453,9 @@ exports.delete_group = async (req, res) => {
 // 8. Remove Moderator (Creator only)
 exports.remove_moderator = async (req, res) => {
     try {
-        const { group_id, user_id } = req.params; // user_id of the moderator to remove
+        const group_id = toObjectId(req.params.group_id);
+        const user_id = toObjectId(req.params.user_id); // user_id of the moderator to remove
+        if (!group_id || !user_id) return sendError(res, 400, 'Invalid group or user identifier');
 
         const group = await Group.findById(group_id);
         if (!group) return sendError(res, 404, 'Group not found');
@@ -441,12 +466,12 @@ exports.remove_moderator = async (req, res) => {
         }
 
         // Cannot remove self
-        if (user_id === req.user.id.toString()) {
+        if (user_id.toString() === req.user.id.toString()) {
             return sendError(res, 400, 'You cannot remove yourself. Use "Delete Group" instead');
         }
 
         // Check if user is actually a moderator
-        if (!group.moderator_ids.some(id => id.toString() === user_id)) {
+        if (!group.moderator_ids.some(id => id.toString() === user_id.toString())) {
             return sendError(res, 400, 'User is not a moderator of this group');
         }
 
@@ -476,28 +501,30 @@ exports.remove_moderator = async (req, res) => {
 // 9. Leave Group (Invited moderators only)
 exports.leave_group = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        const user_id = toObjectId(req.user.id);
+        if (!group_id || !user_id) return sendError(res, 400, 'Invalid group or user identifier');
 
         const group = await Group.findById(group_id);
         if (!group) return sendError(res, 404, 'Group not found');
 
         // Creator cannot leave
-        if (group.created_by.toString() === req.user.id.toString()) {
+        if (group.created_by.toString() === user_id.toString()) {
             return sendError(res, 400, 'Group creator cannot leave the group. You must delete the group');
         }
 
         // Check if user is a moderator
-        if (!group.moderator_ids.some(id => id.toString() === req.user.id.toString())) {
+        if (!group.moderator_ids.some(id => id.toString() === user_id.toString())) {
             return sendError(res, 400, 'You are not a moderator of this group');
         }
 
         // Remove from moderators list
         await Group.findByIdAndUpdate(group_id, {
-            $pull: { moderator_ids: req.user.id }
+            $pull: { moderator_ids: user_id }
         });
 
         // Get the leaving user's details for the notification
-        const leavingUser = await User.findById(req.user.id);
+        const leavingUser = await User.findById(user_id);
         const leavingUserName = leavingUser ? leavingUser.full_name : 'A moderator';
 
         // Notify the creator
@@ -521,8 +548,10 @@ exports.leave_group = async (req, res) => {
 // Update group details
 exports.update_group_details = async (req, res) => {
     try {
-        const { group_id } = req.params;
-        const { group_name, allow_pilgrim_navigation } = req.body;
+        const group_id = toObjectId(req.params.group_id);
+        const group_name = normalizeString(req.body.group_name);
+        const { allow_pilgrim_navigation } = req.body;
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         const group = await Group.findById(group_id);
         if (!group) {
@@ -574,8 +603,9 @@ exports.update_group_details = async (req, res) => {
 // Add a suggested area to a group
 exports.add_suggested_area = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
         const { name, description, latitude, longitude, area_type } = req.body;
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
         const type = area_type || 'suggestion';
 
         if (!name || latitude === undefined || longitude === undefined) {
@@ -712,7 +742,8 @@ exports.add_suggested_area = async (req, res) => {
 // Get all active suggested areas for a group
 exports.get_suggested_areas = async (req, res) => {
     try {
-        const { group_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         const group = await Group.findById(group_id);
         if (!group) {
@@ -733,7 +764,9 @@ exports.get_suggested_areas = async (req, res) => {
 // Delete (soft) a suggested area
 exports.delete_suggested_area = async (req, res) => {
     try {
-        const { group_id, area_id } = req.params;
+        const group_id = toObjectId(req.params.group_id);
+        const area_id = toObjectId(req.params.area_id);
+        if (!group_id || !area_id) return sendError(res, 400, 'Invalid group or area identifier');
 
         const group = await Group.findById(group_id);
         if (!group) {

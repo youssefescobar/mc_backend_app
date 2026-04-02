@@ -1,0 +1,64 @@
+name: Deploy Munawwara Care
+on:
+  push:
+    branches: [ "master", "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write' # Required for Workload Identity
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - id: 'auth'
+        uses: 'google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed'
+        with:
+          workload_identity_provider: 'projects/199324116788/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'github-deployer@munawware-care.iam.gserviceaccount.com'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f'
+        with:
+          project_id: 'munawware-care'
+
+      - name: 'Generate Cloud Run Env YAML'
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE_CONTENT }}
+        run: |
+          if [[ -z "$ENV_FILE_CONTENT" ]]; then
+            echo "ENV_FILE_CONTENT is not set. Configure repository secret ENV_FILE_CONTENT."
+            exit 1
+          fi
+
+          echo "::add-mask::$ENV_FILE_CONTENT"
+          printf '%s' "$ENV_FILE_CONTENT" > .env.tmp
+          echo "# Generated Environment Variables" > _cloudrun_env.yaml
+          while IFS='=' read -r key value || [ -n "$key" ]; do
+            key="${key%$'\r'}"
+            value="${value%$'\r'}"
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ -z "$key" ]] && continue
+            [[ "$key" == "PORT" ]] && continue
+            if [[ "$key" == "BASE_URL" ]]; then
+              value="https://mcbackendapp-199324116788.europe-west8.run.app"
+            fi
+            value_escaped=$(echo "$value" | sed "s/'/''/g")
+            echo "$key: '$value_escaped'" >> _cloudrun_env.yaml
+          done < .env.tmp
+
+      - name: 'Deploy to Cloud Run'
+        run: |
+          gcloud run deploy mcbackendapp \
+            --source . \
+            --region europe-west8 \
+            --project munawware-care \
+            --allow-unauthenticated \
+            --timeout 3600 \
+            --min-instances 1 \
+            --max-instances 1 \
+            --session-affinity \
+            --env-vars-file _cloudrun_env.yaml

@@ -39,7 +39,7 @@ async function init() {
     try {
         const reminders = await Reminder.find({
             status: { $in: ['pending', 'active'] }
-        });
+        }, null, { sanitizeFilter: false });
         logger.info(`[ReminderScheduler] Rehydrating ${reminders.length} reminder(s)`);
         for (const r of reminders) {
             scheduleNext(r);
@@ -155,7 +155,7 @@ async function _fire(reminderId, key) {
             // Whole group — fetch everyone (with or without FCM token) so all get a DB record
             const group = await Group.findById(reminder.group_id).select('pilgrim_ids');
             if (group?.pilgrim_ids?.length) {
-                const pilgrims = await User.find({ _id: { $in: group.pilgrim_ids } }).select('_id fcm_token language');
+                const pilgrims = await User.find({ _id: { $in: group.pilgrim_ids } }, null, { sanitizeFilter: false }).select('_id fcm_token language');
                 allRecipients = pilgrims.map(p => ({
                     _id: p._id,
                     fcm_token: p.fcm_token || null,

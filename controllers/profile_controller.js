@@ -3,17 +3,28 @@ const Group = require('../models/group_model');
 const PendingUser = require('../models/pending_user_model');
 const ModeratorRequest = require('../models/moderator_request_model');
 const Notification = require('../models/notification_model');
+const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
 const { sendSuccess, sendError, sendValidationError, sendServerError } = require('../utils/response_helpers');
 const { translateText } = require('../services/translationService');
+
+const toObjectId = (value) => {
+    if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
+    return new mongoose.Types.ObjectId(String(value));
+};
+
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 /**
  * Get current user profile
  */
 exports.get_profile = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language');
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
+        const user = await User.findById(user_id).select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language');
         
         if (!user) {
             return sendError(res, 404, 'Profile not found');
@@ -21,7 +32,7 @@ exports.get_profile = async (req, res) => {
 
         // For pilgrims, include moderator request status
         if (user.user_type === 'pilgrim') {
-            const latest_request = await ModeratorRequest.findOne({ pilgrim_id: req.user.id }).sort({ requested_at: -1 }).select('status');
+            const latest_request = await ModeratorRequest.findOne({ pilgrim_id: user_id }).sort({ requested_at: -1 }).select('status');
             const moderator_request_status = latest_request?.status || null;
 
             return res.json({
@@ -47,6 +58,9 @@ exports.get_profile = async (req, res) => {
  */
 exports.update_profile = async (req, res) => {
     try {
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
         const { full_name, phone_number, age, gender, medical_history, language } = req.body;
 
         const updateData = {
@@ -59,7 +73,7 @@ exports.update_profile = async (req, res) => {
         };
 
         const updatedUser = await User.findByIdAndUpdate(
-            req.user.id,
+            user_id,
             updateData,
             { new: true, runValidators: true }
         ).select('-password');
@@ -80,9 +94,12 @@ exports.update_profile = async (req, res) => {
  */
 exports.update_language = async (req, res) => {
     try {
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
         const { language } = req.body;
 
-        await User.findByIdAndUpdate(req.user.id, { language }, { new: true, runValidators: true });
+        await User.findByIdAndUpdate(user_id, { language }, { new: true, runValidators: true });
 
         logger.info(`User ${req.user.id} updated language to ${language}`);
         sendSuccess(res, 200, 'Language updated successfully');
@@ -113,6 +130,9 @@ exports.translate = async (req, res) => {
  */
 exports.update_location = async (req, res) => {
     try {
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
         const { latitude, longitude, battery } = req.body;
 
         if (latitude === undefined || longitude === undefined) {
@@ -129,7 +149,7 @@ exports.update_location = async (req, res) => {
             updateData.battery_percent = battery;
         }
 
-        await User.findByIdAndUpdate(req.user.id, updateData);
+        await User.findByIdAndUpdate(user_id, updateData);
 
         sendSuccess(res, 200, 'Location updated');
     } catch (error) {
@@ -142,13 +162,16 @@ exports.update_location = async (req, res) => {
  */
 exports.update_fcm_token = async (req, res) => {
     try {
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
         const { fcm_token } = req.body;
 
         if (!fcm_token) {
             return sendError(res, 400, 'FCM Token is required');
         }
 
-        await User.findByIdAndUpdate(req.user.id, { fcm_token });
+        await User.findByIdAndUpdate(user_id, { fcm_token });
 
         sendSuccess(res, 200, 'FCM Token updated');
     } catch (error) {
@@ -161,8 +184,9 @@ exports.update_fcm_token = async (req, res) => {
  */
 exports.add_email = async (req, res) => {
     try {
-        const { email } = req.body;
-        const user_id = req.user.id;
+        const email = normalizeEmail(req.body.email);
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
         // Check if email is already in use
         const existing_user = await User.findOne({ email, _id: { $ne: user_id } });
@@ -191,7 +215,8 @@ exports.add_email = async (req, res) => {
  */
 exports.send_email_verification = async (req, res) => {
     try {
-        const user_id = req.user.id;
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
         const user = await User.findById(user_id);
         if (!user) {
@@ -239,7 +264,8 @@ exports.send_email_verification = async (req, res) => {
 exports.verify_pilgrim_email = async (req, res) => {
     try {
         const { code } = req.body;
-        const user_id = req.user.id;
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
         const user = await User.findById(user_id);
         if (!user) {
@@ -278,7 +304,8 @@ exports.verify_pilgrim_email = async (req, res) => {
  */
 exports.request_moderator = async (req, res) => {
     try {
-        const user_id = req.user.id;
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
         const user = await User.findById(user_id);
         if (!user) {
@@ -329,8 +356,11 @@ exports.request_moderator = async (req, res) => {
  */
 exports.get_my_group = async (req, res) => {
     try {
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
         // Find group that contains this user (pilgrim)
-        const group = await Group.findOne({ pilgrim_ids: req.user.id })
+        const group = await Group.findOne({ pilgrim_ids: user_id })
             .populate('created_by', 'full_name email phone_number current_latitude current_longitude')
             .populate('moderator_ids', 'full_name email phone_number current_latitude current_longitude');
 
@@ -356,13 +386,16 @@ exports.get_my_group = async (req, res) => {
  */
 exports.trigger_sos = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id);
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
+        const user = await User.findById(user_id);
         if (!user) {
             return sendError(res, 404, 'User not found');
         }
 
         // Find the group this user belongs to
-        const group = await Group.findOne({ pilgrim_ids: req.user.id })
+        const group = await Group.findOne({ pilgrim_ids: user_id })
             .populate('moderator_ids', '_id full_name fcm_token');
 
         if (!group) {

@@ -3,6 +3,7 @@ const { logger } = require('./logger');
 
 // Connection configuration
 mongoose.set('strictQuery', false);
+mongoose.set('sanitizeFilter', false); // Sanitization applied selectively only to user-input queries in controllers
 
 const connectionOptions = {
     maxPoolSize: 10,
