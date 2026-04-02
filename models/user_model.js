@@ -74,6 +74,89 @@ const user_schema = new mongoose.Schema({
         default: 'en',
         enum: ['en', 'ar', 'ur', 'fr', 'id', 'tr']
     },
+    room_number: {
+        type: String,
+        trim: true,
+        maxlength: 50
+    },
+    bus_info: {
+        type: String,
+        trim: true,
+        maxlength: 120
+    },
+    hotel_name: {
+        type: String,
+        trim: true,
+        maxlength: 120
+    },
+    ethnicity: {
+        type: String,
+        enum: [
+            'Arab',
+            'South Asian',
+            'Turkic',
+            'Persian',
+            'Malay/Indonesian',
+            'African',
+            'Kurdish',
+            'Berber',
+            'European Muslim',
+            'Other'
+        ],
+        default: 'Other'
+    },
+    moderated_by: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        index: true
+    },
+    visa: {
+        visa_number: {
+            type: String,
+            trim: true,
+            maxlength: 64
+        },
+        issue_date: {
+            type: Date
+        },
+        expiry_date: {
+            type: Date
+        },
+        status: {
+            type: String,
+            enum: ['pending', 'issued', 'rejected', 'expired', 'unknown'],
+            default: 'unknown'
+        }
+    },
+    one_time_login: {
+        token_hash: {
+            type: String,
+            default: null
+        },
+        issued_at: {
+            type: Date,
+            default: null
+        },
+        expires_at: {
+            type: Date,
+            default: null
+        },
+        used_at: {
+            type: Date,
+            default: null
+        },
+        issued_by: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        }
+    },
+    bound_device_id: {
+        type: String,
+        trim: true,
+        maxlength: 128,
+        default: null
+    },
     
     // ========================================
     // Profile & Media
@@ -150,6 +233,7 @@ const user_schema = new mongoose.Schema({
 user_schema.index({ user_type: 1, active: 1 });
 user_schema.index({ current_latitude: 1, current_longitude: 1 }); // For geospatial queries
 user_schema.index({ is_online: 1, user_type: 1 });
+user_schema.index({ moderated_by: 1, user_type: 1 });
 
 // ========================================
 // Virtual Properties

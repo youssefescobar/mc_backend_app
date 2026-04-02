@@ -6,6 +6,8 @@ const ModeratorRequest = require('../models/moderator_request_model');
 const Notification = require('../models/notification_model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const QRCode = require('qrcode');
 const mongoose = require('mongoose');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
 const { logger } = require('../config/logger');
@@ -17,6 +19,65 @@ const toObjectId = (value) => {
 };
 
 const normalizeString = (value) => String(value || '').trim();
+
+const ONE_TIME_LOGIN_TTL_MS = 24 * 60 * 60 * 1000;
+
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
+const randomPassword = () => crypto.randomBytes(24).toString('base64url');
+
+const randomLoginToken = () => crypto.randomBytes(32).toString('base64url');
+
+const buildVisaPayload = (visa = {}) => {
+    const status = normalizeString(visa.status) || undefined;
+    const visa_number = normalizeString(visa.visa_number) || undefined;
+    const issue_date = visa.issue_date ? new Date(visa.issue_date) : undefined;
+    const expiry_date = visa.expiry_date ? new Date(visa.expiry_date) : undefined;
+
+    if (!status && !visa_number && !issue_date && !expiry_date) {
+        return undefined;
+    }
+
+    return {
+        ...(visa_number ? { visa_number } : {}),
+        ...(status ? { status } : {}),
+        ...(issue_date ? { issue_date } : {}),
+        ...(expiry_date ? { expiry_date } : {}),
+    };
+};
+
+const issueOneTimePilgrimLogin = async ({ pilgrim, moderatorId }) => {
+    const token = randomLoginToken();
+    const token_hash = hashToken(token);
+    const issued_at = new Date();
+    const expires_at = new Date(Date.now() + ONE_TIME_LOGIN_TTL_MS);
+
+    pilgrim.one_time_login = {
+        token_hash,
+        issued_at,
+        expires_at,
+        used_at: null,
+        issued_by: moderatorId,
+    };
+
+    await pilgrim.save();
+
+    const payload = `mcare://pilgrim-login?token=${encodeURIComponent(token)}`;
+    const qr_code_data_url = await QRCode.toDataURL(payload, { width: 280, margin: 1 });
+
+    return {
+        token,
+        expires_at,
+        qr_payload: payload,
+        qr_code_data_url,
+    };
+};
+
+const canManageGroup = (group, user) => {
+    if (!group || !user) return false;
+    if (user.role === 'admin') return true;
+    return (group.moderator_ids || []).some((id) => id.toString() === String(user.id));
+};
 
 /**
  * Register a new pilgrim account (public signup)
@@ -503,7 +564,7 @@ exports.get_pilgrim_by_id = async (req, res) => {
         }
 
         const pilgrim = await User.findOne(query)
-            .select('_id full_name national_id email phone_number medical_history age gender created_at')
+            .select('_id full_name national_id email phone_number medical_history age gender language room_number bus_info hotel_name ethnicity visa moderated_by created_at')
             .lean();
 
         if (!pilgrim) {
@@ -513,6 +574,236 @@ exports.get_pilgrim_by_id = async (req, res) => {
         res.json(pilgrim);
     } catch (error) {
         sendServerError(res, logger, 'Get pilgrim by ID error', error);
+    }
+};
+
+/**
+ * Moderator/Admin provisions a pilgrim and assigns to group with one-time QR login.
+ */
+exports.provision_pilgrim = async (req, res) => {
+    try {
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) {
+            return sendError(res, 400, 'Invalid group identifier');
+        }
+
+        const group = await Group.findById(group_id).select('_id group_name moderator_ids pilgrim_ids');
+        if (!group) {
+            return sendError(res, 404, 'Group not found');
+        }
+
+        if (!canManageGroup(group, req.user)) {
+            return sendError(res, 403, 'Not authorized to manage this group');
+        }
+
+        const full_name = normalizeString(req.body.full_name);
+        const phone_number = normalizeString(req.body.phone_number);
+        const national_id = normalizeString(req.body.national_id) || undefined;
+        const email = normalizeString(req.body.email).toLowerCase() || undefined;
+
+        const duplicateQuery = {
+            user_type: 'pilgrim',
+            $or: [
+                { phone_number },
+                ...(national_id ? [{ national_id }] : []),
+                ...(email ? [{ email }] : []),
+            ],
+        };
+
+        const existing = await User.findOne(duplicateQuery);
+        if (existing) {
+            return sendError(res, 409, 'Pilgrim already exists with this phone, national ID, or email');
+        }
+
+        const pilgrim = await User.create({
+            full_name,
+            phone_number,
+            national_id,
+            email,
+            password: await bcrypt.hash(randomPassword(), 10),
+            user_type: 'pilgrim',
+            age: req.body.age,
+            gender: req.body.gender,
+            language: req.body.language || 'en',
+            medical_history: normalizeString(req.body.medical_history) || undefined,
+            room_number: normalizeString(req.body.room_number) || undefined,
+            bus_info: normalizeString(req.body.bus_info) || undefined,
+            hotel_name: normalizeString(req.body.hotel_name) || undefined,
+            ethnicity: normalizeString(req.body.ethnicity) || undefined,
+            visa: buildVisaPayload(req.body.visa),
+            created_by: toObjectId(req.user.id),
+            moderated_by: toObjectId(req.user.id),
+        });
+
+        await Group.findByIdAndUpdate(group_id, { $addToSet: { pilgrim_ids: pilgrim._id } });
+        const login = await issueOneTimePilgrimLogin({ pilgrim, moderatorId: toObjectId(req.user.id) });
+
+        sendSuccess(res, 201, 'Pilgrim provisioned successfully', {
+            pilgrim: {
+                _id: pilgrim._id,
+                full_name: pilgrim.full_name,
+                phone_number: pilgrim.phone_number,
+                group_id,
+            },
+            one_time_login: login,
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Provision pilgrim error', error);
+    }
+};
+
+/**
+ * Moderator/Admin bulk provisions pilgrims from parsed spreadsheet rows.
+ */
+exports.provision_pilgrims_bulk = async (req, res) => {
+    try {
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) {
+            return sendError(res, 400, 'Invalid group identifier');
+        }
+
+        const group = await Group.findById(group_id).select('_id group_name moderator_ids pilgrim_ids');
+        if (!group) {
+            return sendError(res, 404, 'Group not found');
+        }
+
+        if (!canManageGroup(group, req.user)) {
+            return sendError(res, 403, 'Not authorized to manage this group');
+        }
+
+        const rows = Array.isArray(req.body.pilgrims) ? req.body.pilgrims : [];
+        const created = [];
+        const skipped = [];
+
+        for (let index = 0; index < rows.length; index += 1) {
+            const row = rows[index] || {};
+            const full_name = normalizeString(row.full_name);
+            const phone_number = normalizeString(row.phone_number);
+            const national_id = normalizeString(row.national_id) || undefined;
+            const email = normalizeString(row.email).toLowerCase() || undefined;
+
+            if (!full_name || !phone_number) {
+                skipped.push({
+                    row: index + 1,
+                    reason: 'Missing required fields (full_name, phone_number)',
+                });
+                continue;
+            }
+
+            const existing = await User.findOne({
+                user_type: 'pilgrim',
+                $or: [
+                    { phone_number },
+                    ...(national_id ? [{ national_id }] : []),
+                    ...(email ? [{ email }] : []),
+                ],
+            }).select('_id full_name');
+
+            if (existing) {
+                skipped.push({
+                    row: index + 1,
+                    reason: `Duplicate pilgrim (${existing.full_name})`,
+                });
+                continue;
+            }
+
+            const pilgrim = await User.create({
+                full_name,
+                phone_number,
+                national_id,
+                email,
+                password: await bcrypt.hash(randomPassword(), 10),
+                user_type: 'pilgrim',
+                age: row.age,
+                gender: row.gender,
+                language: row.language || 'en',
+                medical_history: normalizeString(row.medical_history) || undefined,
+                room_number: normalizeString(row.room_number) || undefined,
+                bus_info: normalizeString(row.bus_info) || undefined,
+                hotel_name: normalizeString(row.hotel_name) || undefined,
+                ethnicity: normalizeString(row.ethnicity) || undefined,
+                visa: buildVisaPayload(row.visa),
+                created_by: toObjectId(req.user.id),
+                moderated_by: toObjectId(req.user.id),
+            });
+
+            await Group.findByIdAndUpdate(group_id, { $addToSet: { pilgrim_ids: pilgrim._id } });
+            const login = await issueOneTimePilgrimLogin({ pilgrim, moderatorId: toObjectId(req.user.id) });
+
+            created.push({
+                row: index + 1,
+                pilgrim: {
+                    _id: pilgrim._id,
+                    full_name: pilgrim.full_name,
+                    phone_number: pilgrim.phone_number,
+                },
+                one_time_login: login,
+            });
+        }
+
+        sendSuccess(res, 200, 'Bulk provisioning completed', {
+            summary: {
+                total_rows: rows.length,
+                created_count: created.length,
+                skipped_count: skipped.length,
+            },
+            created,
+            skipped,
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Bulk provision pilgrims error', error);
+    }
+};
+
+/**
+ * Pilgrim one-time QR token login with device binding.
+ */
+exports.pilgrim_one_time_login = async (req, res) => {
+    try {
+        const token = normalizeString(req.body.token);
+        const device_id = normalizeString(req.body.device_id);
+
+        const token_hash = hashToken(token);
+        const pilgrim = await User.findOne({
+            user_type: 'pilgrim',
+            'one_time_login.token_hash': token_hash,
+        });
+
+        if (!pilgrim) {
+            return sendError(res, 401, 'Invalid one-time token');
+        }
+
+        if (!pilgrim.one_time_login?.expires_at || new Date(pilgrim.one_time_login.expires_at) < new Date()) {
+            return sendError(res, 401, 'One-time token expired');
+        }
+
+        if (pilgrim.one_time_login?.used_at) {
+            return sendError(res, 401, 'One-time token already used');
+        }
+
+        if (pilgrim.bound_device_id && pilgrim.bound_device_id !== device_id) {
+            return sendError(res, 403, 'Account is bound to another device. Contact moderator to reset.');
+        }
+
+        pilgrim.bound_device_id = device_id;
+        pilgrim.one_time_login.used_at = new Date();
+        await pilgrim.save();
+
+        const jwt_token = jwt.sign(
+            { id: pilgrim._id, role: 'pilgrim' },
+            process.env.JWT_SECRET,
+            { expiresIn: JWT_EXPIRATION }
+        );
+
+        sendSuccess(res, 200, 'Login successful', {
+            token: jwt_token,
+            role: 'pilgrim',
+            user_id: pilgrim._id,
+            full_name: pilgrim.full_name,
+            language: pilgrim.language || 'en',
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Pilgrim one-time login error', error);
     }
 };
 
