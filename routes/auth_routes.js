@@ -35,6 +35,7 @@ router.post('/refresh-session', auth_ctrl.refresh_session);
 router.get('/me', profile_ctrl.get_profile);
 router.put('/update-profile', validate(update_profile_schema), profile_ctrl.update_profile);
 router.put('/update-language', validate(update_language_schema), profile_ctrl.update_language);
+router.post('/translate', profile_ctrl.translate);
 router.put('/location', profile_ctrl.update_location);
 router.put('/fcm-token', profile_ctrl.update_fcm_token);
 

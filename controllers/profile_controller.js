@@ -6,6 +6,7 @@ const Notification = require('../models/notification_model');
 const { logger } = require('../config/logger');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
 const { sendSuccess, sendError, sendValidationError, sendServerError } = require('../utils/response_helpers');
+const { translateText } = require('../services/translationService');
 
 /**
  * Get current user profile
@@ -87,6 +88,23 @@ exports.update_language = async (req, res) => {
         sendSuccess(res, 200, 'Language updated successfully');
     } catch (error) {
         sendServerError(res, logger, 'Update language error', error);
+    }
+};
+
+/**
+ * On-demand text translation (used by Flutter client for chat bubbles).
+ * Leverages the backend translation cache — repeat calls are free.
+ */
+exports.translate = async (req, res) => {
+    try {
+        const { text, targetLang } = req.body;
+        if (!text || !targetLang) {
+            return sendError(res, 400, 'text and targetLang are required');
+        }
+        const translated = await translateText(text, targetLang);
+        sendSuccess(res, 200, 'OK', { translatedText: translated });
+    } catch (error) {
+        sendServerError(res, logger, 'Translate error', error);
     }
 };
 

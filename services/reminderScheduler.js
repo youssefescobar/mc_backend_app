@@ -17,6 +17,7 @@ const { logger } = require('../config/logger');
 
 // Prevent import cycles — require lazily inside functions
 const { sendPushNotification } = require('./pushNotificationService');
+const { translateText } = require('./translationService');
 const Notification = require('../models/notification_model');
 
 /** ms threshold: fire immediately if we're within this window past due */
@@ -141,61 +142,82 @@ async function _fire(reminderId, key) {
             return;
         }
 
-        // Gather FCM tokens
-        let tokens = [];
+        // Fetch all target pilgrims: _id + fcm_token + language
+        // We need _id for notification DB records, fcm_token for push, language for translation
+        let allRecipients = []; // { _id, fcm_token, language }
 
         if (reminder.target_type === 'pilgrim' && reminder.pilgrim_id) {
-            const pilgrim = await User.findById(reminder.pilgrim_id).select('fcm_token');
-            if (pilgrim?.fcm_token) tokens = [pilgrim.fcm_token];
+            const pilgrim = await User.findById(reminder.pilgrim_id).select('_id fcm_token language');
+            if (pilgrim) {
+                allRecipients = [{ _id: pilgrim._id, fcm_token: pilgrim.fcm_token || null, language: pilgrim.language || 'en' }];
+            }
         } else {
-            // Whole group
+            // Whole group — fetch everyone (with or without FCM token) so all get a DB record
             const group = await Group.findById(reminder.group_id).select('pilgrim_ids');
             if (group?.pilgrim_ids?.length) {
-                const pilgrims = await User.find({
-                    _id: { $in: group.pilgrim_ids },
-                    fcm_token: { $ne: null }
-                }).select('fcm_token');
-                tokens = pilgrims.map(p => p.fcm_token).filter(Boolean);
+                const pilgrims = await User.find({ _id: { $in: group.pilgrim_ids } }).select('_id fcm_token language');
+                allRecipients = pilgrims.map(p => ({
+                    _id: p._id,
+                    fcm_token: p.fcm_token || null,
+                    language: p.language || 'en'
+                }));
             }
         }
 
-        if (tokens.length > 0) {
-            // Reuse the exact same FCM payload shape as urgent TTS messages
-            await sendPushNotification(
-                tokens,
-                'Reminder',
-                reminder.text,
-                {
-                    type: 'urgent',
-                    messageType: 'reminder_tts',
-                    body: reminder.text,
-                    reminderId: reminderId
-                },
-                true // isUrgent = true → data-only, background handler does sound+TTS
-            );
-            logger.info(`[ReminderScheduler] ✓ Reminder ${reminderId} fire #${reminder.fires_sent + 1} sent to ${tokens.length} device(s)`);
-
-            // Persist a Notification record so it appears in the pilgrim(s) Alerts tab
-            const targetUserIds = reminder.target_type === 'pilgrim' && reminder.pilgrim_id
-                ? [reminder.pilgrim_id]
-                : await (async () => {
-                      const Group = require('../models/group_model');
-                      const grp = await Group.findById(reminder.group_id).select('pilgrim_ids');
-                      return grp?.pilgrim_ids ?? [];
-                  })();
-
-            const notifDocs = targetUserIds.map(uid => ({
-                user_id: uid,
-                type: 'reminder',
-                title: 'Reminder',
-                message: reminder.text,
-                data: { group_id: reminder.group_id }
+        if (allRecipients.length > 0) {
+            // Translate once per unique language (covers both push and DB records)
+            const uniqueLangs = [...new Set(allRecipients.map(r => r.language))];
+            const translationsByLang = {};
+            await Promise.all(uniqueLangs.map(async (lang) => {
+                const [translatedTitle, translatedText] = await Promise.all([
+                    translateText('Reminder', lang),
+                    translateText(reminder.text, lang)
+                ]);
+                translationsByLang[lang] = { translatedTitle, translatedText };
             }));
+
+            // --- FCM push: only recipients with a token, grouped by language ---
+            const fcmByLang = {};
+            for (const r of allRecipients.filter(r => r.fcm_token)) {
+                if (!fcmByLang[r.language]) fcmByLang[r.language] = [];
+                fcmByLang[r.language].push(r.fcm_token);
+            }
+
+            await Promise.all(Object.entries(fcmByLang).map(([lang, tokens]) => {
+                const { translatedTitle, translatedText } = translationsByLang[lang];
+                return sendPushNotification(
+                    tokens,
+                    translatedTitle,
+                    translatedText,
+                    {
+                        type: 'urgent',
+                        messageType: 'reminder_tts',
+                        body: translatedText,
+                        reminderId: reminderId
+                    },
+                    true // isUrgent = true → data-only, background handler does sound+TTS
+                );
+            }));
+
+            const fcmCount = allRecipients.filter(r => r.fcm_token).length;
+            logger.info(`[ReminderScheduler] ✓ Reminder ${reminderId} fire #${reminder.fires_sent + 1} — FCM sent to ${fcmCount}/${allRecipients.length} device(s)`);
+
+            // --- DB notification records: one per user, each in their own language ---
+            const notifDocs = allRecipients.map(r => {
+                const { translatedTitle, translatedText } = translationsByLang[r.language];
+                return {
+                    user_id: r._id,
+                    type: 'reminder',
+                    title: translatedTitle,
+                    message: translatedText,
+                    data: { group_id: reminder.group_id }
+                };
+            });
             if (notifDocs.length) {
                 await Notification.insertMany(notifDocs);
             }
         } else {
-            logger.warn(`[ReminderScheduler] Reminder ${reminderId}: no FCM tokens found`);
+            logger.warn(`[ReminderScheduler] Reminder ${reminderId}: no recipients found`);
         }
 
         // Update DB
