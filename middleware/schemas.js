@@ -174,6 +174,14 @@ exports.update_location_schema = Joi.object({
         'any.required': 'Longitude is required',
         'number.min': 'Longitude must be between -180 and 180',
         'number.max': 'Longitude must be between -180 and 180'
+    }),
+    battery_percent: Joi.number().optional().min(0).max(100).messages({
+        'number.min': 'Battery percent must be between 0 and 100',
+        'number.max': 'Battery percent must be between 0 and 100'
+    }),
+    battery: Joi.number().optional().min(0).max(100).messages({
+        'number.min': 'Battery must be between 0 and 100',
+        'number.max': 'Battery must be between 0 and 100'
     })
 });
 

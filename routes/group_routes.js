@@ -43,6 +43,7 @@ router.post('/:group_id/leave', moderatorAuth, validate(group_id_param_schema, '
 // Suggested Areas
 router.post('/:group_id/suggested-areas', moderatorAuth, validate(group_id_param_schema, 'params'), group_controller.add_suggested_area);
 router.get('/:group_id/suggested-areas', validate(group_id_param_schema, 'params'), group_controller.get_suggested_areas);
+router.put('/:group_id/suggested-areas/:area_id', moderatorAuth, validate(group_id_param_schema, 'params'), validate(area_id_param_schema, 'params'), group_controller.update_suggested_area);
 router.delete('/:group_id/suggested-areas/:area_id', moderatorAuth, validate(area_id_param_schema, 'params'), group_controller.delete_suggested_area);
 
 module.exports = router;
