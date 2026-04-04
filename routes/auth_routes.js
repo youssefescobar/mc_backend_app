@@ -66,6 +66,9 @@ const modAuth = authorize('moderator', 'admin');
 router.post('/register-pilgrim', modAuth, validate(register_pilgrim_schema), auth_ctrl.register_pilgrim);
 router.post('/groups/:group_id/provision-pilgrim', modAuth, validate(group_id_param_schema, 'params'), validate(provision_pilgrim_schema), auth_ctrl.provision_pilgrim);
 router.post('/groups/:group_id/provision-pilgrims-bulk', modAuth, validate(group_id_param_schema, 'params'), validate(provision_pilgrims_bulk_schema), auth_ctrl.provision_pilgrims_bulk);
+router.get('/groups/:group_id/provisioning-status', modAuth, validate(group_id_param_schema, 'params'), auth_ctrl.get_group_provisioning_status);
+router.post('/groups/:group_id/pilgrims/:pilgrim_id/reissue-login', modAuth, validate(group_id_param_schema, 'params'), validate(pilgrim_id_param_schema, 'params'), auth_ctrl.reissue_pilgrim_login);
+router.delete('/groups/:group_id/pilgrims/:pilgrim_id', modAuth, validate(group_id_param_schema, 'params'), validate(pilgrim_id_param_schema, 'params'), auth_ctrl.delete_provisioned_pilgrim);
 router.get('/search-pilgrims', modAuth, searchLimiter, auth_ctrl.search_pilgrims);
 router.get('/pilgrims/:pilgrim_id', modAuth, validate(pilgrim_id_param_schema, 'params'), auth_ctrl.get_pilgrim_by_id);
 

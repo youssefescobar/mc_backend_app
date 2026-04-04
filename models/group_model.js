@@ -6,6 +6,8 @@ const group_schema = new mongoose.Schema({
     moderator_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Multiple moderators allowed
     pilgrim_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    assigned_hotel_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Hotel' }],
+    assigned_bus_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Bus' }],
     allow_pilgrim_navigation: { type: Boolean, default: false } // Allow pilgrims to navigate to moderator location
 }, { timestamps: true });
 

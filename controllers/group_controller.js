@@ -1,5 +1,7 @@
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
+const Hotel = require('../models/hotel_model');
+const Bus = require('../models/bus_model');
 const SuggestedArea = require('../models/suggested_area_model');
 const Notification = require('../models/notification_model');
 const Message = require('../models/message_model');
@@ -23,6 +25,8 @@ exports.get_single_group = async (req, res) => {
 
         const group = await Group.findById(group_id)
             .populate('moderator_ids', 'full_name email')
+            .populate('assigned_hotel_ids', 'name city rooms')
+            .populate('assigned_bus_ids', 'bus_number destination departure_time driver_name')
             .lean(); // Use lean for easier object manipulation
 
         if (!group) {
@@ -219,6 +223,8 @@ exports.get_my_groups = async (req, res) => {
         const query = { moderator_ids: user_id };
         const groups = await Group.find(query)
             .populate('moderator_ids', 'full_name email')
+            .populate('assigned_hotel_ids', 'name city rooms')
+            .populate('assigned_bus_ids', 'bus_number destination departure_time driver_name')
             .skip(skip)
             .limit(limitNum)
             .lean(); // Use lean for better performance
@@ -592,6 +598,8 @@ exports.update_group_details = async (req, res) => {
 
         const updated_group = await Group.findById(group_id)
             .populate('moderator_ids', 'full_name email')
+            .populate('assigned_hotel_ids', 'name city rooms')
+            .populate('assigned_bus_ids', 'bus_number destination departure_time driver_name')
             .lean();
 
         // Clean up __v and pilgrim_ids for response to match docs
@@ -905,5 +913,38 @@ exports.update_suggested_area = async (req, res) => {
         sendSuccess(res, 200, 'Suggested area updated', area);
     } catch (error) {
         sendServerError(res, logger, 'Update suggested area error', error);
+    }
+};
+
+// Get resource options assigned to a group (moderator/admin)
+exports.get_group_resource_options = async (req, res) => {
+    try {
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
+
+        const group = await Group.findById(group_id)
+            .select('_id moderator_ids assigned_hotel_ids assigned_bus_ids');
+
+        if (!group) {
+            return sendError(res, 404, 'Group not found');
+        }
+
+        const is_admin = req.user.role === 'admin';
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+        if (!is_admin && !is_group_moderator) {
+            return sendError(res, 403, 'Not authorized to view this group');
+        }
+
+        const [hotels, buses] = await Promise.all([
+            Hotel.find({ _id: { $in: group.assigned_hotel_ids || [] }, active: true }).sort({ name: 1 }).lean(),
+            Bus.find({ _id: { $in: group.assigned_bus_ids || [] }, active: true }).sort({ destination: 1, departure_time: 1 }).lean()
+        ]);
+
+        sendSuccess(res, 200, null, {
+            hotels,
+            buses,
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Get group resource options error', error);
     }
 };

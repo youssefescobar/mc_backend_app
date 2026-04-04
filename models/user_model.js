@@ -133,6 +133,10 @@ const user_schema = new mongoose.Schema({
             type: String,
             default: null
         },
+        token_plain: {
+            type: String,
+            default: null
+        },
         issued_at: {
             type: Date,
             default: null

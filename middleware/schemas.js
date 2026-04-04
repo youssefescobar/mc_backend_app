@@ -115,8 +115,11 @@ exports.provision_pilgrim_schema = Joi.object({
     language: Joi.string().optional().valid(...SUPPORTED_LANGUAGES).default('en'),
     medical_history: Joi.string().optional().allow('').max(500),
     room_number: Joi.string().optional().allow('').max(50),
+    room_id: Joi.string().optional().allow(''),
     bus_info: Joi.string().optional().allow('').max(120),
+    bus_id: Joi.string().optional().allow(''),
     hotel_name: Joi.string().optional().allow('').max(120),
+    hotel_id: Joi.string().optional().allow(''),
     ethnicity: Joi.string().optional().valid(...ETHNICITIES),
     visa: Joi.object({
         visa_number: Joi.string().optional().allow('').max(64),
