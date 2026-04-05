@@ -300,7 +300,7 @@ exports.join_group_schema = Joi.object({
 });
 
 exports.group_id_query_schema = Joi.object({
-    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).required()
+    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).optional()
 }).unknown(true);
 
 exports.call_active_query_schema = Joi.object({
@@ -319,8 +319,8 @@ exports.decline_call_schema = Joi.object({
 }).or('callerId', 'callRecordId');
 
 exports.create_reminder_schema = Joi.object({
-    group_id: Joi.string().pattern(OBJECT_ID_PATTERN).required(),
-    target_type: Joi.string().valid('pilgrim', 'group').required(),
+    group_ids: Joi.array().items(Joi.string().pattern(OBJECT_ID_PATTERN)).optional(),
+    target_type: Joi.string().valid('pilgrim', 'group', 'system', 'all_groups').required(),
     pilgrim_id: Joi.string().pattern(OBJECT_ID_PATTERN).when('target_type', {
         is: 'pilgrim',
         then: Joi.required(),
@@ -329,6 +329,8 @@ exports.create_reminder_schema = Joi.object({
     text: Joi.string().trim().min(1).max(1000).required(),
     scheduled_at: Joi.date().iso().required(),
     repeat_count: Joi.number().integer().min(1).max(20).optional(),
-    repeat_interval_min: Joi.number().integer().min(1).max(1440).optional()
+    repeat_interval_min: Joi.number().integer().min(1).max(1440).optional(),
+    is_daily: Joi.boolean().optional().default(false),
+    times_per_day: Joi.number().integer().min(1).max(10).optional()
 });
 

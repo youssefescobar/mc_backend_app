@@ -6,15 +6,14 @@ const reminder_schema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    group_id: {
+    group_ids: [{
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Group',
-        required: true
-    },
-    // 'pilgrim' = one specific pilgrim, 'group' = everyone in the group
+        ref: 'Group'
+    }],
+    // 'pilgrim' = one specific pilgrim, 'group' = everyone in selected groups, 'system' = everyone
     target_type: {
         type: String,
-        enum: ['pilgrim', 'group'],
+        enum: ['pilgrim', 'group', 'system', 'all_groups'],
         required: true
     },
     pilgrim_id: {
@@ -45,6 +44,16 @@ const reminder_schema = new mongoose.Schema({
         required: true,
         min: 1,
         default: 15
+    },
+    is_daily: {
+        type: Boolean,
+        default: false
+    },
+    times_per_day: {
+        type: Number,
+        default: 1,
+        min: 1,
+        max: 10
     },
     status: {
         type: String,
