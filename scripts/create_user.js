@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const readline = require('readline');
 require('dotenv').config();
 
-const User = require('./models/user_model');
+const User = require('../models/user_model');
 
 const args = process.argv.slice(2);
 
