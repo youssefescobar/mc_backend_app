@@ -90,6 +90,20 @@ function scheduleNext(reminder) {
     const totalFires = reminder.repeat_count || 1;
 
     if (fireCount >= totalFires) {
+        if (reminder.is_daily) {
+            // Daily recurrence: schedule for the same time tomorrow
+            const nextDay = new Date(reminder.scheduled_at);
+            nextDay.setDate(nextDay.getDate() + 1);
+
+            Reminder.findByIdAndUpdate(key, {
+                scheduled_at: nextDay,
+                fires_sent: 0,
+                status: 'pending'
+            }, { new: true }).then(updated => {
+                if (updated) scheduleNext(updated);
+            }).catch(err => logger.error(`[ReminderScheduler] Error updating daily reminder ${key}:`, err));
+            return;
+        }
         // Already done — mark completed if not already
         Reminder.findByIdAndUpdate(key, { status: 'completed' }).catch(() => {});
         return;
@@ -151,16 +165,34 @@ async function _fire(reminderId, key) {
             if (pilgrim) {
                 allRecipients = [{ _id: pilgrim._id, fcm_token: pilgrim.fcm_token || null, language: pilgrim.language || 'en' }];
             }
+        } else if (reminder.target_type === 'system') {
+            // Target type 'system' — fetch EVERYONE (regardless of role, or maybe just pilgrims?)
+            // Usually 'system' implies all pilgrims.
+            const pilgrims = await User.find({ role: 'pilgrim' }).select('_id fcm_token language');
+            allRecipients = pilgrims.map(p => ({
+                _id: p._id,
+                fcm_token: p.fcm_token || null,
+                language: p.language || 'en'
+            }));
         } else {
-            // Whole group — fetch everyone (with or without FCM token) so all get a DB record
-            const group = await Group.findById(reminder.group_id).select('pilgrim_ids');
-            if (group?.pilgrim_ids?.length) {
-                const pilgrims = await User.find({ _id: { $in: group.pilgrim_ids } }, null, { sanitizeFilter: false }).select('_id fcm_token language');
-                allRecipients = pilgrims.map(p => ({
-                    _id: p._id,
-                    fcm_token: p.fcm_token || null,
-                    language: p.language || 'en'
-                }));
+            // target_type === 'group' or 'all_groups'
+            // Support both old group_id and new group_ids array
+            const targetGroupIds = reminder.group_ids && reminder.group_ids.length > 0
+                ? reminder.group_ids
+                : (reminder.group_id ? [reminder.group_id] : []);
+
+            if (targetGroupIds.length > 0) {
+                const groups = await Group.find({ _id: { $in: targetGroupIds } }).select('pilgrim_ids');
+                const uniquePilgrimIds = [...new Set(groups.flatMap(g => g.pilgrim_ids || []))];
+
+                if (uniquePilgrimIds.length > 0) {
+                    const pilgrims = await User.find({ _id: { $in: uniquePilgrimIds } }).select('_id fcm_token language');
+                    allRecipients = pilgrims.map(p => ({
+                        _id: p._id,
+                        fcm_token: p.fcm_token || null,
+                        language: p.language || 'en'
+                    }));
+                }
             }
         }
 
@@ -203,6 +235,10 @@ async function _fire(reminderId, key) {
             logger.info(`[ReminderScheduler] ✓ Reminder ${reminderId} fire #${reminder.fires_sent + 1} — FCM sent to ${fcmCount}/${allRecipients.length} device(s)`);
 
             // --- DB notification records: one per user, each in their own language ---
+            const targetGroupIdForNotif = (reminder.group_ids && reminder.group_ids.length > 0)
+                ? reminder.group_ids[0]
+                : reminder.group_id;
+
             const notifDocs = allRecipients.map(r => {
                 const { translatedTitle, translatedText } = translationsByLang[r.language];
                 return {
@@ -210,7 +246,7 @@ async function _fire(reminderId, key) {
                     type: 'reminder',
                     title: translatedTitle,
                     message: translatedText,
-                    data: { group_id: reminder.group_id }
+                    data: { group_id: targetGroupIdForNotif }
                 };
             });
             if (notifDocs.length) {
@@ -240,7 +276,9 @@ async function _fire(reminderId, key) {
                 status: 'active',
                 target_type: reminder.target_type,
                 pilgrim_id: reminder.pilgrim_id,
-                group_id: reminder.group_id
+                group_id: reminder.group_id,
+                group_ids: reminder.group_ids,
+                is_daily: reminder.is_daily
             };
             scheduleNext(updated);
         }

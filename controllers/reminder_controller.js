@@ -12,24 +12,29 @@ const toObjectId = (value) => {
 exports.create_reminder = async (req, res) => {
     try {
         const {
-            group_id,
-            target_type,       // 'pilgrim' | 'group'
+            group_ids,         // Array of group IDs
+            target_type,       // 'pilgrim' | 'group' | 'system' | 'all_groups'
             pilgrim_id,        // required when target_type === 'pilgrim'
             text,
             scheduled_at,      // ISO 8601 string
             repeat_count,
-            repeat_interval_min
+            repeat_interval_min,
+            is_daily,
+            times_per_day
         } = req.body;
 
-        const safe_group_id = toObjectId(group_id);
+        const safe_group_ids = Array.isArray(group_ids) ? group_ids.map(id => toObjectId(id)).filter(id => id !== null) : [];
         const safe_pilgrim_id = pilgrim_id ? toObjectId(pilgrim_id) : null;
         const safe_user_id = toObjectId(req.user.id);
 
-        if (!safe_group_id || !safe_user_id || !target_type || !text || !scheduled_at) {
-            return res.status(400).json({ success: false, message: 'group_id, target_type, text and scheduled_at are required' });
+        if (!safe_user_id || !target_type || !text || !scheduled_at) {
+            return res.status(400).json({ success: false, message: 'target_type, text and scheduled_at are required' });
         }
         if (target_type === 'pilgrim' && !safe_pilgrim_id) {
             return res.status(400).json({ success: false, message: 'pilgrim_id is required when target_type is "pilgrim"' });
+        }
+        if (target_type === 'group' && safe_group_ids.length === 0) {
+            return res.status(400).json({ success: false, message: 'At least one group_id is required when target_type is "group"' });
         }
         if (new Date(scheduled_at) <= new Date()) {
             return res.status(400).json({ success: false, message: 'scheduled_at must be in the future' });
@@ -37,13 +42,15 @@ exports.create_reminder = async (req, res) => {
 
         const reminder = await Reminder.create({
             created_by: safe_user_id,
-            group_id: safe_group_id,
+            group_ids: safe_group_ids,
             target_type,
             pilgrim_id: target_type === 'pilgrim' ? safe_pilgrim_id : null,
             text: text.trim(),
             scheduled_at: new Date(scheduled_at),
             repeat_count: Math.min(Math.max(parseInt(repeat_count) || 1, 1), 20),
             repeat_interval_min: Math.max(parseInt(repeat_interval_min) || 15, 1),
+            is_daily: !!is_daily,
+            times_per_day: Math.min(Math.max(parseInt(times_per_day) || 1, 1), 10),
             status: 'pending',
             fires_sent: 0
         });
@@ -51,7 +58,7 @@ exports.create_reminder = async (req, res) => {
         // Hand off to the scheduler
         scheduler.add(reminder);
 
-        logger.info(`[Reminder] Created ${reminder._id} by ${req.user.id} for group ${group_id}`);
+        logger.info(`[Reminder] Created ${reminder._id} by ${req.user.id} for target ${target_type}`);
         res.status(201).json({ success: true, reminder });
     } catch (err) {
         logger.error(`[Reminder] create error: ${err.message}`);
@@ -59,15 +66,17 @@ exports.create_reminder = async (req, res) => {
     }
 };
 
-// ── List Reminders for a Group ────────────────────────────────────────────────
+// ── List Reminders ────────────────────────────────────────────────────────────
 exports.get_reminders = async (req, res) => {
     try {
         const group_id = toObjectId(req.query.group_id);
-        if (!group_id) {
-            return res.status(400).json({ success: false, message: 'group_id is required' });
+        const query = {};
+        
+        if (group_id) {
+            query.group_ids = group_id;
         }
 
-        const reminders = await Reminder.find({ group_id })
+        const reminders = await Reminder.find(query)
             .populate('pilgrim_id', 'full_name')
             .populate('created_by', 'full_name')
             .sort({ scheduled_at: -1 })
