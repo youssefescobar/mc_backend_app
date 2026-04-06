@@ -38,7 +38,7 @@ jobs:
           printf '%s' "$ENV_FILE_CONTENT" > .env.tmp
           echo "# Generated Environment Variables" > _cloudrun_env.yaml
           while IFS='=' read -r key value || [ -n "$key" ]; do
-            key="${key%$'\r'}"
+            key="${key%$'\r'}" 
             value="${value%$'\r'}"
             [[ "$key" =~ ^#.*$ ]] && continue
             [[ -z "$key" ]] && continue
