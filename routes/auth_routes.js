@@ -16,7 +16,11 @@ const {
     request_moderator_schema,
     update_language_schema,
     register_pilgrim_schema,
-    pilgrim_id_param_schema
+    pilgrim_id_param_schema,
+    provision_pilgrim_schema,
+    provision_pilgrims_bulk_schema,
+    pilgrim_token_login_schema,
+    group_id_param_schema
 } = require('../middleware/schemas');
 const { authLimiter, loginLimiter, registerLimiter, searchLimiter } = require('../middleware/rate_limit');
 const upload = require('../middleware/upload_middleware');
@@ -27,6 +31,7 @@ const upload = require('../middleware/upload_middleware');
 router.post('/register', registerLimiter, validate(register_schema), auth_ctrl.register_user);
 router.post('/register-invited-pilgrim', registerLimiter, validate(register_invited_pilgrim_schema), auth_ctrl.register_invited_pilgrim);
 router.post('/login', loginLimiter, validate(login_schema), auth_ctrl.login_user);
+router.post('/pilgrim/one-time-login', loginLimiter, validate(pilgrim_token_login_schema), auth_ctrl.pilgrim_one_time_login);
 
 // ==========================================
 // Protected Routes (All Users)
@@ -59,6 +64,11 @@ router.post('/request-moderator', validate(request_moderator_schema), profile_ct
 const modAuth = authorize('moderator', 'admin');
 
 router.post('/register-pilgrim', modAuth, validate(register_pilgrim_schema), auth_ctrl.register_pilgrim);
+router.post('/groups/:group_id/provision-pilgrim', modAuth, validate(group_id_param_schema, 'params'), validate(provision_pilgrim_schema), auth_ctrl.provision_pilgrim);
+router.post('/groups/:group_id/provision-pilgrims-bulk', modAuth, validate(group_id_param_schema, 'params'), validate(provision_pilgrims_bulk_schema), auth_ctrl.provision_pilgrims_bulk);
+router.get('/groups/:group_id/provisioning-status', modAuth, validate(group_id_param_schema, 'params'), auth_ctrl.get_group_provisioning_status);
+router.post('/groups/:group_id/pilgrims/:pilgrim_id/reissue-login', modAuth, validate(group_id_param_schema, 'params'), validate(pilgrim_id_param_schema, 'params'), auth_ctrl.reissue_pilgrim_login);
+router.delete('/groups/:group_id/pilgrims/:pilgrim_id', modAuth, validate(group_id_param_schema, 'params'), validate(pilgrim_id_param_schema, 'params'), auth_ctrl.delete_provisioned_pilgrim);
 router.get('/search-pilgrims', modAuth, searchLimiter, auth_ctrl.search_pilgrims);
 router.get('/pilgrims/:pilgrim_id', modAuth, validate(pilgrim_id_param_schema, 'params'), auth_ctrl.get_pilgrim_by_id);
 

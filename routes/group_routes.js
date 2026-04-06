@@ -33,6 +33,7 @@ router.post('/:group_id/add-pilgrim', moderatorAuth, validate(group_id_param_sch
 router.post('/:group_id/remove-pilgrim', moderatorAuth, validate(group_id_param_schema, 'params'), validate(add_pilgrim_schema), group_controller.remove_pilgrim_from_group);
 // Available bands route removed
 router.get('/:group_id', moderatorAuth, validate(group_id_param_schema, 'params'), group_controller.get_single_group);
+router.get('/:group_id/resource-options', moderatorAuth, validate(group_id_param_schema, 'params'), group_controller.get_group_resource_options);
 router.put('/:group_id', moderatorAuth, validate(group_id_param_schema, 'params'), validate(update_group_schema), group_controller.update_group_details);
 router.delete('/:group_id', moderatorAuth, validate(group_id_param_schema, 'params'), group_controller.delete_group);
 router.get('/:group_id/qr', moderatorAuth, validate(group_id_param_schema, 'params'), group_controller.generate_group_qr);
@@ -43,6 +44,7 @@ router.post('/:group_id/leave', moderatorAuth, validate(group_id_param_schema, '
 // Suggested Areas
 router.post('/:group_id/suggested-areas', moderatorAuth, validate(group_id_param_schema, 'params'), group_controller.add_suggested_area);
 router.get('/:group_id/suggested-areas', validate(group_id_param_schema, 'params'), group_controller.get_suggested_areas);
+router.put('/:group_id/suggested-areas/:area_id', moderatorAuth, validate(group_id_param_schema, 'params'), validate(area_id_param_schema, 'params'), group_controller.update_suggested_area);
 router.delete('/:group_id/suggested-areas/:area_id', moderatorAuth, validate(area_id_param_schema, 'params'), group_controller.delete_suggested_area);
 
 module.exports = router;

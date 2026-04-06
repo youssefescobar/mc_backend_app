@@ -133,7 +133,7 @@ exports.update_location = async (req, res) => {
         const user_id = toObjectId(req.user.id);
         if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
-        const { latitude, longitude, battery } = req.body;
+        const { latitude, longitude, battery, battery_percent } = req.body;
 
         if (latitude === undefined || longitude === undefined) {
             return sendError(res, 400, 'Latitude and longitude required');
@@ -145,8 +145,11 @@ exports.update_location = async (req, res) => {
             last_location_update: new Date()
         };
 
-        if (battery !== undefined) {
-            updateData.battery_percent = battery;
+        const normalizedBattery =
+            battery_percent !== undefined ? battery_percent : battery;
+
+        if (normalizedBattery !== undefined) {
+            updateData.battery_percent = normalizedBattery;
         }
 
         await User.findByIdAndUpdate(user_id, updateData);

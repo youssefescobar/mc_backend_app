@@ -1,5 +1,7 @@
 const Group = require('../models/group_model');
 const User = require('../models/user_model');
+const Hotel = require('../models/hotel_model');
+const Bus = require('../models/bus_model');
 const SuggestedArea = require('../models/suggested_area_model');
 const Notification = require('../models/notification_model');
 const Message = require('../models/message_model');
@@ -23,6 +25,8 @@ exports.get_single_group = async (req, res) => {
 
         const group = await Group.findById(group_id)
             .populate('moderator_ids', 'full_name email')
+            .populate('assigned_hotel_ids', 'name city rooms')
+            .populate('assigned_bus_ids', 'bus_number destination departure_time driver_name')
             .lean(); // Use lean for easier object manipulation
 
         if (!group) {
@@ -46,11 +50,14 @@ exports.get_single_group = async (req, res) => {
             .lean();
 
         const pilgrims_with_details = pilgrims.map(pilgrim => {
+            const lat = Number(pilgrim.current_latitude);
+            const lng = Number(pilgrim.current_longitude);
+            const hasLocation = Number.isFinite(lat) && Number.isFinite(lng);
             return {
                 ...pilgrim,
-                location: (pilgrim.current_latitude && pilgrim.current_longitude) ? {
-                    lat: pilgrim.current_latitude,
-                    lng: pilgrim.current_longitude
+                location: hasLocation ? {
+                    lat,
+                    lng
                 } : null,
                 last_updated: pilgrim.last_location_update,
                 battery_percent: pilgrim.battery_percent,
@@ -216,6 +223,8 @@ exports.get_my_groups = async (req, res) => {
         const query = { moderator_ids: user_id };
         const groups = await Group.find(query)
             .populate('moderator_ids', 'full_name email')
+            .populate('assigned_hotel_ids', 'name city rooms')
+            .populate('assigned_bus_ids', 'bus_number destination departure_time driver_name')
             .skip(skip)
             .limit(limitNum)
             .lean(); // Use lean for better performance
@@ -250,11 +259,15 @@ exports.get_my_groups = async (req, res) => {
                 const pilgrim = pilgrimsMap[id.toString()];
                 if (!pilgrim) return null;
 
+                const lat = Number(pilgrim.current_latitude);
+                const lng = Number(pilgrim.current_longitude);
+                const hasLocation = Number.isFinite(lat) && Number.isFinite(lng);
+
                 return {
                     ...pilgrim,
-                    location: (pilgrim.current_latitude && pilgrim.current_longitude) ? {
-                        lat: pilgrim.current_latitude,
-                        lng: pilgrim.current_longitude
+                    location: hasLocation ? {
+                        lat,
+                        lng
                     } : null,
                     last_updated: pilgrim.last_location_update,
                     battery_percent: pilgrim.battery_percent,
@@ -585,6 +598,8 @@ exports.update_group_details = async (req, res) => {
 
         const updated_group = await Group.findById(group_id)
             .populate('moderator_ids', 'full_name email')
+            .populate('assigned_hotel_ids', 'name city rooms')
+            .populate('assigned_bus_ids', 'bus_number destination departure_time driver_name')
             .lean();
 
         // Clean up __v and pilgrim_ids for response to match docs
@@ -755,7 +770,10 @@ exports.get_suggested_areas = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        sendSuccess(res, 200, null, { areas });
+        logger.info(`Fetching suggested areas for group ${group_id}: ${areas.length} areas found`);
+        
+        // Return areas wrapped in data object
+        sendSuccess(res, 200, null, { data: areas });
     } catch (error) {
         sendServerError(res, logger, 'Get suggested areas error', error);
     }
@@ -843,5 +861,90 @@ exports.delete_suggested_area = async (req, res) => {
         sendSuccess(res, 200, 'Suggested area removed');
     } catch (error) {
         sendServerError(res, logger, 'Delete suggested area error', error);
+    }
+};
+
+// Update a suggested area
+exports.update_suggested_area = async (req, res) => {
+    try {
+        const group_id = toObjectId(req.params.group_id);
+        const area_id = toObjectId(req.params.area_id);
+        const { name, description, latitude, longitude } = req.body;
+
+        if (!group_id || !area_id) return sendError(res, 400, 'Invalid group or area identifier');
+
+        const group = await Group.findById(group_id);
+        if (!group) {
+            return sendError(res, 404, 'Group not found');
+        }
+
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+        if (!is_group_moderator && req.user.role !== 'admin') {
+            return sendError(res, 403, 'Not authorized');
+        }
+
+        // Build update object (only include provided fields)
+        const updateData = {};
+        if (name !== undefined) updateData.name = name.trim();
+        if (description !== undefined) updateData.description = description.trim();
+        if (latitude !== undefined) updateData.latitude = latitude;
+        if (longitude !== undefined) updateData.longitude = longitude;
+
+        if (Object.keys(updateData).length === 0) {
+            return sendError(res, 400, 'No valid fields to update');
+        }
+
+        const area = await SuggestedArea.findOneAndUpdate(
+            { _id: area_id, group_id, active: true },
+            updateData,
+            { new: true }
+        );
+
+        if (!area) {
+            return sendError(res, 404, 'Suggested area not found');
+        }
+
+        // --- Socket.io real-time broadcast ---
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`group_${group_id}`).emit('area_updated', area);
+        }
+
+        sendSuccess(res, 200, 'Suggested area updated', area);
+    } catch (error) {
+        sendServerError(res, logger, 'Update suggested area error', error);
+    }
+};
+
+// Get resource options assigned to a group (moderator/admin)
+exports.get_group_resource_options = async (req, res) => {
+    try {
+        const group_id = toObjectId(req.params.group_id);
+        if (!group_id) return sendError(res, 400, 'Invalid group identifier');
+
+        const group = await Group.findById(group_id)
+            .select('_id moderator_ids assigned_hotel_ids assigned_bus_ids');
+
+        if (!group) {
+            return sendError(res, 404, 'Group not found');
+        }
+
+        const is_admin = req.user.role === 'admin';
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+        if (!is_admin && !is_group_moderator) {
+            return sendError(res, 403, 'Not authorized to view this group');
+        }
+
+        const [hotels, buses] = await Promise.all([
+            Hotel.find({ _id: { $in: group.assigned_hotel_ids || [] }, active: true }).sort({ name: 1 }).lean(),
+            Bus.find({ _id: { $in: group.assigned_bus_ids || [] }, active: true }).sort({ destination: 1, departure_time: 1 }).lean()
+        ]);
+
+        sendSuccess(res, 200, null, {
+            hotels,
+            buses,
+        });
+    } catch (error) {
+        sendServerError(res, logger, 'Get group resource options error', error);
     }
 };

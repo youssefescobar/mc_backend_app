@@ -8,6 +8,19 @@ const Joi = require('joi');
 // Constants for reusable validation patterns
 const SUPPORTED_LANGUAGES = ['en', 'ar', 'ur', 'fr', 'id', 'tr'];
 const GENDERS = ['male', 'female', 'other'];
+const ETHNICITIES = [
+    'Arab',
+    'South Asian',
+    'Turkic',
+    'Persian',
+    'Malay/Indonesian',
+    'African',
+    'Kurdish',
+    'Berber',
+    'European Muslim',
+    'Other'
+];
+const VISA_STATUSES = ['pending', 'issued', 'rejected', 'expired', 'unknown'];
 
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d@$!%*?&]{8,}$/;
@@ -79,7 +92,50 @@ exports.register_pilgrim_schema = Joi.object({
     password: Joi.string().optional().min(SIMPLE_PASSWORD_MIN).messages({
         'string.min': `Password must be at least ${SIMPLE_PASSWORD_MIN} characters`
     }),
-    language: Joi.string().optional().valid(...SUPPORTED_LANGUAGES).default('en')
+    language: Joi.string().optional().valid(...SUPPORTED_LANGUAGES).default('en'),
+    room_number: Joi.string().optional().allow('').max(50),
+    bus_info: Joi.string().optional().allow('').max(120),
+    hotel_name: Joi.string().optional().allow('').max(120),
+    ethnicity: Joi.string().optional().valid(...ETHNICITIES),
+    visa: Joi.object({
+        visa_number: Joi.string().optional().allow('').max(64),
+        issue_date: Joi.date().optional(),
+        expiry_date: Joi.date().optional(),
+        status: Joi.string().optional().valid(...VISA_STATUSES)
+    }).optional()
+});
+
+exports.provision_pilgrim_schema = Joi.object({
+    full_name: Joi.string().required().min(3).max(100),
+    phone_number: Joi.string().required().min(3).max(30),
+    national_id: Joi.string().optional().allow(''),
+    email: Joi.string().optional().allow('').email(),
+    age: Joi.number().optional().min(0).max(120),
+    gender: Joi.string().optional().valid(...GENDERS),
+    language: Joi.string().optional().valid(...SUPPORTED_LANGUAGES).default('en'),
+    medical_history: Joi.string().optional().allow('').max(500),
+    room_number: Joi.string().optional().allow('').max(50),
+    room_id: Joi.string().optional().allow(''),
+    bus_info: Joi.string().optional().allow('').max(120),
+    bus_id: Joi.string().optional().allow(''),
+    hotel_name: Joi.string().optional().allow('').max(120),
+    hotel_id: Joi.string().optional().allow(''),
+    ethnicity: Joi.string().optional().valid(...ETHNICITIES),
+    visa: Joi.object({
+        visa_number: Joi.string().optional().allow('').max(64),
+        issue_date: Joi.date().optional(),
+        expiry_date: Joi.date().optional(),
+        status: Joi.string().optional().valid(...VISA_STATUSES)
+    }).optional()
+});
+
+exports.provision_pilgrims_bulk_schema = Joi.object({
+    pilgrims: Joi.array().items(exports.provision_pilgrim_schema).min(1).max(100).required()
+});
+
+exports.pilgrim_token_login_schema = Joi.object({
+    token: Joi.string().trim().required(),
+    device_id: Joi.string().trim().required().max(128)
 });
 
 // Register Invited Pilgrim (Invitation Link)
@@ -121,6 +177,14 @@ exports.update_location_schema = Joi.object({
         'any.required': 'Longitude is required',
         'number.min': 'Longitude must be between -180 and 180',
         'number.max': 'Longitude must be between -180 and 180'
+    }),
+    battery_percent: Joi.number().optional().min(0).max(100).messages({
+        'number.min': 'Battery percent must be between 0 and 100',
+        'number.max': 'Battery percent must be between 0 and 100'
+    }),
+    battery: Joi.number().optional().min(0).max(100).messages({
+        'number.min': 'Battery must be between 0 and 100',
+        'number.max': 'Battery must be between 0 and 100'
     })
 });
 

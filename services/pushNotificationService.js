@@ -1,5 +1,66 @@
 const { getMessaging, isInitialized } = require('../config/firebase');
 const { logger } = require('../config/logger');
+const User = require('../models/user_model');
+
+function normalizeFcmDataPayload(data = {}) {
+    const normalized = {};
+
+    for (const [key, value] of Object.entries(data || {})) {
+        if (value === undefined || value === null) {
+            continue;
+        }
+
+        if (typeof value === 'string') {
+            normalized[key] = value;
+            continue;
+        }
+
+        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+            normalized[key] = String(value);
+            continue;
+        }
+
+        // For ObjectId / Date / object payloads, serialize safely to string.
+        try {
+            normalized[key] = JSON.stringify(value);
+        } catch {
+            normalized[key] = String(value);
+        }
+    }
+
+    return normalized;
+}
+
+function isTokenNoLongerValid(error) {
+    if (!error) return false;
+
+    const code = String(error.code || '').toLowerCase();
+    const message = String(error.message || '').toLowerCase();
+
+    return (
+        code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token' ||
+        message.includes('requested entity was not found') ||
+        message.includes('registration token is not registered') ||
+        message.includes('invalid registration token')
+    );
+}
+
+async function cleanupInvalidTokens(tokens = []) {
+    const uniqueTokens = [...new Set(tokens.filter(Boolean))];
+    if (uniqueTokens.length === 0) return;
+
+    try {
+        const result = await User.updateMany(
+            { fcm_token: { $in: uniqueTokens } },
+            { $unset: { fcm_token: '' } }
+        );
+
+        logger.warn(`[FCM] Cleared ${uniqueTokens.length} invalid token(s) from payload; users matched: ${result.matchedCount}, users updated: ${result.modifiedCount}`);
+    } catch (cleanupError) {
+        logger.error(`[FCM] Failed to cleanup invalid tokens: ${cleanupError.message}`);
+    }
+}
 
 /**
  * Send a multicast notification to multiple devices using Firebase Cloud Messaging (FCM).
@@ -19,24 +80,26 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
         return null;
     }
 
+    const normalizedData = normalizeFcmDataPayload(data);
+
     // Determine if we should use Data-Only (Silent) payload.
     // We ONLY want Data-Only for "Urgent TTS" / "Reminder TTS" messages so the app can control the "Sound -> TTS -> Sound" sequence.
     // For other urgent messages (Text, Voice Note) or normal messages, we want standard system notifications.
-    const isUrgentTTS = isUrgent && (data.messageType === 'tts' || data.messageType === 'reminder_tts');
-    const isIncomingCall = data.type === 'incoming_call';
-    const isCallCancel = data.type === 'call_cancel';
+    const isUrgentTTS = isUrgent && (normalizedData.messageType === 'tts' || normalizedData.messageType === 'reminder_tts');
+    const isIncomingCall = normalizedData.type === 'incoming_call';
+    const isCallCancel = normalizedData.type === 'call_cancel';
 
     // Construct the message payload (Base)
     // Preserve the caller-supplied 'type' (e.g. 'new_message') as 'notification_type'
     // so we can use it for deep-link navigation on the client side.
-    const notificationType = data.type || 'general';
+    const notificationType = normalizedData.type || 'general';
     const message = {
         tokens: tokens,
         data: {
-            ...data,
+            ...normalizedData,
             // 'type' controls how the Flutter client shows the notification (urgent/normal/incoming_call)
             // call_cancel and incoming_call must keep their original type so Flutter recognises them.
-            type: (isIncomingCall || isCallCancel) ? data.type : (isUrgent ? 'urgent' : 'normal'),
+            type: (isIncomingCall || isCallCancel) ? normalizedData.type : (isUrgent ? 'urgent' : 'normal'),
             // 'notification_type' is the semantic type — what this notification is about
             notification_type: notificationType,
             title: title,
@@ -90,13 +153,23 @@ async function sendPushNotification(tokens, title, body, data = {}, isUrgent = f
 
         if (response.failureCount > 0) {
             const failedTokens = [];
+            const invalidTokens = [];
             response.responses.forEach((resp, idx) => {
                 if (!resp.success) {
-                    failedTokens.push(tokens[idx]);
-                    logger.error(`Failure sending to token ${tokens[idx]}: ${resp.error?.message}`);
+                    const failedToken = tokens[idx];
+                    failedTokens.push(failedToken);
+                    logger.error(`Failure sending to token ${failedToken}: ${resp.error?.message}`);
+
+                    if (isTokenNoLongerValid(resp.error)) {
+                        invalidTokens.push(failedToken);
+                    }
                 }
             });
             logger.warn(`Failed tokens count: ${failedTokens.length}`);
+
+            if (invalidTokens.length > 0) {
+                await cleanupInvalidTokens(invalidTokens);
+            }
         }
 
         return response;
