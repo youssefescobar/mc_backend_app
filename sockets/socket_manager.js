@@ -1,69 +1,110 @@
 const User = require('../models/user_model');
+const { logger } = require('../config/logger');
+const rateLimiter = require('../middleware/socket_rate_limiter');
+const { validateSocketEvent } = require('../middleware/socket_validation');
 
 const initializeSockets = (io) => {
     io.on('connection', (socket) => {
-        console.log(`[Socket] User connected: ${socket.id}`);
+        // User is already authenticated via socketAuthMiddleware
+        // socket.data.userId and socket.data.role are set
+        const { userId, role } = socket.data;
+        
+        logger.info(`[Socket] User connected: ${userId} (${role}) -> ${socket.id}`);
 
-        // ── User Registration ──────────────────────────────────────────────────
-        socket.on('register-user', async ({ userId, role }) => {
-            socket.data.userId = userId;
-            socket.data.role = role || 'pilgrim';
-            // Join personal room for targeted server-to-client events
-            socket.join(`user_${userId}`);
-            console.log(`[Socket] User registered: ${userId} (${socket.data.role}) -> ${socket.id}`);
+        // Join personal room for targeted server-to-client events
+        socket.join(`user_${userId}`);
 
-            try {
-                await User.findByIdAndUpdate(userId, { is_online: true, last_active_at: new Date() });
-            } catch (err) {
-                console.error('[Socket] Error updating online status (connect):', err);
-            }
+        // Update online status
+        User.findByIdAndUpdate(userId, { 
+            is_online: true, 
+            last_active_at: new Date() 
+        }).catch(err => {
+            logger.error(`[Socket] Error updating online status for ${userId}:`, err);
         });
 
-        // ── Helper: find socket by userId ──────────────────────────────────────
-        async function getSocketByUserId(userId) {
-            const sockets = await io.in(`user_${userId}`).fetchSockets();
+        // ── Helper Functions ───────────────────────────────────────────────────
+        
+        /**
+         * Validate and rate limit socket event
+         * @param {string} eventName - Name of the event
+         * @param {any} data - Event data
+         * @param {number} rateLimit - Max events per minute (default: 60)
+         * @returns {Object|null} - Validated data or null if invalid/rate limited
+         */
+        function validateAndRateLimit(eventName, data, rateLimit = 60) {
+            // Check rate limit
+            if (!rateLimiter.check(socket.id, eventName, rateLimit)) {
+                socket.emit('error', { 
+                    type: 'rate_limit',
+                    message: `Too many '${eventName}' events. Please slow down.` 
+                });
+                return null;
+            }
 
+            // Validate event data
+            const { valid, error, value } = validateSocketEvent(eventName, data);
+            if (!valid) {
+                logger.warn(`[Socket] Invalid data for '${eventName}' from ${userId}: ${error}`);
+                socket.emit('error', { 
+                    type: 'validation_error',
+                    message: `Invalid data for ${eventName}: ${error}` 
+                });
+                return null;
+            }
+
+            return value;
+        }
+
+        /**
+         * Find socket by userId (helper for direct messaging)
+         */
+        async function getSocketByUserId(targetUserId) {
+            const sockets = await io.in(`user_${targetUserId}`).fetchSockets();
             return sockets[0] || null;
         }
 
         // ── Group Rooms ────────────────────────────────────────────────────────
         socket.on('join_group', async (groupId) => {
-            if (groupId) {
-                socket.join(`group_${groupId}`);
-                socket.data.groupId = groupId;
-                if (socket.data.userId) {
-                    io.to(`group_${groupId}`).emit('status_update', {
-                        pilgrimId: socket.data.userId,
-                        active: true,
-                        last_active_at: new Date()
-                    });
-                }
-                // Sync any currently-active nav beacons to the newly joined client
-                try {
-                    const roomSockets = await io.in(`group_${groupId}`).fetchSockets();
-                    for (const s of roomSockets) {
-                        if (s.id !== socket.id && s.data.navBeacon && s.data.navBeacon.groupId === groupId) {
-                            socket.emit('mod_nav_beacon', {
-                                moderatorId: s.data.navBeacon.moderatorId,
-                                moderatorName: s.data.navBeacon.moderatorName,
-                                enabled: true,
-                                lat: s.data.navBeacon.lat,
-                                lng: s.data.navBeacon.lng,
-                            });
-                        }
+            // Validate input
+            const validated = validateAndRateLimit('join_group', groupId, 10); // Max 10 joins/min
+            if (!validated) return;
+            
+            socket.join(`group_${validated}`);
+            socket.data.groupId = validated;
+            
+            io.to(`group_${validated}`).emit('status_update', {
+                pilgrimId: userId,
+                active: true,
+                last_active_at: new Date()
+            });
+            
+            // Sync any currently-active nav beacons to the newly joined client
+            try {
+                const roomSockets = await io.in(`group_${validated}`).fetchSockets();
+                for (const s of roomSockets) {
+                    if (s.id !== socket.id && s.data.navBeacon && s.data.navBeacon.groupId === validated) {
+                        socket.emit('mod_nav_beacon', {
+                            moderatorId: s.data.navBeacon.moderatorId,
+                            moderatorName: s.data.navBeacon.moderatorName,
+                            enabled: true,
+                            lat: s.data.navBeacon.lat,
+                            lng: s.data.navBeacon.lng,
+                        });
                     }
-                } catch (err) {
-                    console.error('[Socket] Error syncing nav beacons on join:', err);
                 }
-                console.log(`[Socket] User ${socket.id} joined group_${groupId}`);
+            } catch (err) {
+                logger.error(`[Socket] Error syncing nav beacons for ${userId}:`, err);
             }
+            
+            logger.debug(`[Socket] User ${userId} joined group_${validated}`);
         });
 
         socket.on('leave_group', (groupId) => {
-            if (groupId) {
-                socket.leave(`group_${groupId}`);
-                console.log(`[Socket] User ${socket.id} left group_${groupId}`);
-            }
+            const validated = validateAndRateLimit('leave_group', groupId, 10);
+            if (!validated) return;
+            
+            socket.leave(`group_${validated}`);
+            logger.debug(`[Socket] User ${userId} left group_${validated}`);
         });
 
         // ── Location Updates ───────────────────────────────────────────────────
@@ -96,8 +137,13 @@ const initializeSockets = (io) => {
         // These socket events ONLY manage call state (ringing, accepted, ended).
         // Both users join the same Agora channel, and Agora cloud routes media.
 
-        socket.on('call-offer', async ({ to, channelName }) => {
-            console.log(`[Socket] Call offer from ${socket.data.userId} to ${to}`);
+        socket.on('call-offer', async (data) => {
+            // Validate and rate limit (max 5 call attempts per minute)
+            const validated = validateAndRateLimit('call-offer', data, 5);
+            if (!validated) return;
+            
+            const { to, channelName } = validated;
+            logger.info(`[Socket] Call offer from ${userId} to ${to}`);
 
             const { sendPushNotification } = require('../services/pushNotificationService');
             const CallHistory = require('../models/call_history_model');
@@ -518,13 +564,17 @@ const initializeSockets = (io) => {
 
         // ── Disconnect ────────────────────────────────────────────────────────
         socket.on('disconnect', async (reason) => {
-            // Clean up any pending ring timeout
+            const { userId, role, groupId, navBeacon } = socket.data;
+            logger.info(`[Socket] User disconnected: ${userId} (${role}) - Reason: ${reason}`);
+
+            // Clean up rate limiter history
+            rateLimiter.removeSocket(socket.id);
+
+            // Clear all pending timeouts to prevent memory leaks
             if (socket.data.callRingTimeout) {
                 clearTimeout(socket.data.callRingTimeout);
                 delete socket.data.callRingTimeout;
             }
-            const { userId, role, groupId, navBeacon } = socket.data;
-            console.log(`[Socket] User disconnected: ${socket.id} (Reason: ${reason}, User: ${userId})`);
 
             // Auto-disable nav beacon when moderator disconnects
             if (navBeacon) {
@@ -535,22 +585,32 @@ const initializeSockets = (io) => {
                     lat: null,
                     lng: null,
                 });
-                console.log(`[Socket] Auto-disabled nav beacon for ${navBeacon.moderatorId}`);
+                logger.debug(`[Socket] Auto-disabled nav beacon for ${navBeacon.moderatorId}`);
             }
 
+            // Update online status if user disconnected
             if (userId) {
                 try {
-                    await User.findByIdAndUpdate(userId, { is_online: false, last_active_at: new Date() });
-
-                    if (groupId) {
-                        io.to(`group_${groupId}`).emit('status_update', {
-                            pilgrimId: userId,
-                            active: false,
+                    const remainingSockets = await io.in(`user_${userId}`).fetchSockets();
+                    
+                    // Only set offline if no other sockets for this user
+                    if (remainingSockets.length === 0) {
+                        await User.findByIdAndUpdate(userId, {
+                            is_online: false,
                             last_active_at: new Date()
                         });
+
+                        // Notify group members if user was in a group
+                        if (groupId) {
+                            io.to(`group_${groupId}`).emit('status_update', {
+                                pilgrimId: userId,
+                                active: false,
+                                last_active_at: new Date()
+                            });
+                        }
                     }
                 } catch (err) {
-                    console.error('[Socket] Error updating online status (disconnect):', err);
+                    logger.error(`[Socket] Error updating online status for ${userId}:`, err);
                 }
             }
         });

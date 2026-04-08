@@ -52,6 +52,11 @@ subClient.on('error', (err) => logger.error('Redis sub error:', err));
 io.adapter(createAdapter(pubClient, subClient));
 logger.info('Socket.io Redis adapter connected');
 
+// Socket.IO Authentication Middleware
+const socketAuthMiddleware = require('./middleware/socket_auth_middleware');
+io.use(socketAuthMiddleware);
+logger.info('Socket.IO authentication middleware registered');
+
 // Initialize Sockets
 initializeSockets(io);
 
