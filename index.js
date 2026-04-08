@@ -14,6 +14,8 @@ const { disconnectDB } = require('./config/db');
 const { http_logger, logger } = require('./config/logger');
 const { initializeSockets } = require('./sockets/socket_manager');
 const sanitize_request = require('./middleware/sanitize_middleware');
+const { createAdapter } = require('@socket.io/redis-adapter');
+const Redis = require('ioredis');
 
 // Routes
 const auth_routes = require('./routes/auth_routes');
@@ -31,13 +33,28 @@ const reminder_routes = require('./routes/reminder_routes');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
-    pingTimeout: 10000, // Wait 10s before considering dead (default 20000)
-    pingInterval: 5000  // Send ping every 5s (default 25000)
+    cors: { 
+        origin: process.env.SOCKET_CORS_ORIGINS?.split(',') || ["http://localhost:5173", "http://localhost:4173"],
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    pingTimeout: 10000,
+    pingInterval: 5000
 });
+
+// Redis Adapter
+const pubClient = new Redis(process.env.REDIS_URL);
+const subClient = pubClient.duplicate();
+
+pubClient.on('error', (err) => logger.error('Redis pub error:', err));
+subClient.on('error', (err) => logger.error('Redis sub error:', err));
+
+io.adapter(createAdapter(pubClient, subClient));
+logger.info('Socket.io Redis adapter connected');
 
 // Initialize Sockets
 initializeSockets(io);
+
 app.set('socketio', io);
 
 // Trust proxy - for rate limiting and IP detection when behind reverse proxy
@@ -149,6 +166,9 @@ const gracefulShutdown = async ({ signal = 'SIGTERM', forwardSignal = false } = 
     server.close(async () => {
         logger.info('HTTP server closed');
         await disconnectDB();
+        await pubClient.quit();
+        await subClient.quit();
+        logger.info('Redis adapter disconnected');
 
         // For nodemon restarts: release resources first, then re-emit signal
         // so nodemon can start the new instance safely.

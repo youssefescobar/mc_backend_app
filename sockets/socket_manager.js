@@ -20,8 +20,10 @@ const initializeSockets = (io) => {
         });
 
         // ── Helper: find socket by userId ──────────────────────────────────────
-        function getSocketByUserId(userId) {
-            return Array.from(io.sockets.sockets.values()).find(s => s.data.userId === userId);
+        async function getSocketByUserId(userId) {
+            const sockets = await io.in(`user_${userId}`).fetchSockets();
+
+            return sockets[0] || null;
         }
 
         // ── Group Rooms ────────────────────────────────────────────────────────
@@ -65,13 +67,13 @@ const initializeSockets = (io) => {
         });
 
         // ── Location Updates ───────────────────────────────────────────────────
-        socket.on('update_location', (data) => {
+        socket.on('update_location', async (data) => {
             const { groupId, pilgrimId, battery_percent } = data;
             if (groupId) {
                 socket.to(`group_${groupId}`).emit('location_update', data);
 
                 if (battery_percent !== undefined) {
-                    const pilgrimSocket = getSocketByUserId(pilgrimId);
+                    const pilgrimSocket = await getSocketByUserId(pilgrimId);
                     if (pilgrimSocket) {
                         pilgrimSocket.emit('battery-update', { battery_percent, pilgrimId });
                     }
@@ -88,7 +90,11 @@ const initializeSockets = (io) => {
             }
         });
 
-        // ── WebRTC Call Signaling ──────────────────────────────────────────────
+        // ── Agora Call Signaling ───────────────────────────────────────────────
+        // NOTE: We use Agora SDK for audio/video streaming. Agora handles ALL
+        // WebRTC signaling internally (ICE candidates, SDP offer/answer, STUN/TURN).
+        // These socket events ONLY manage call state (ringing, accepted, ended).
+        // Both users join the same Agora channel, and Agora cloud routes media.
 
         socket.on('call-offer', async ({ to, channelName }) => {
             console.log(`[Socket] Call offer from ${socket.data.userId} to ${to}`);
@@ -260,12 +266,12 @@ const initializeSockets = (io) => {
         socket.on('call-answer', async ({ to }) => {
             console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
             // Clear the caller's ring timeout — the call was answered
-            const callerSocket = getSocketByUserId(to);
+            const callerSocket = await getSocketByUserId(to);
             if (callerSocket?.data?.callRingTimeout) {
                 clearTimeout(callerSocket.data.callRingTimeout);
                 delete callerSocket.data.callRingTimeout;
             }
-            const target = callerSocket || getSocketByUserId(to);
+            const target = callerSocket || await getSocketByUserId(to);
             if (target) {
                 console.log(`[Socket] Relaying call-answer to socket ${target.id}`);
                 target.emit('call-answer', { from: socket.data.userId });
@@ -288,17 +294,10 @@ const initializeSockets = (io) => {
             }
         });
 
-        socket.on('ice-candidate', ({ to, candidate }) => {
-            const target = getSocketByUserId(to);
-            if (target) {
-                target.emit('ice-candidate', { candidate, from: socket.data.userId });
-            }
-        });
-
         socket.on('call-declined', async ({ to }) => {
             console.log(`[Socket] Call declined from ${socket.data.userId} to ${to}`);
             // Clear the caller's ring timeout — decline was explicit
-            const callerSock = getSocketByUserId(to);
+            const callerSock = await getSocketByUserId(to);
             if (callerSock?.data?.callRingTimeout) {
                 clearTimeout(callerSock.data.callRingTimeout);
                 delete callerSock.data.callRingTimeout;
@@ -317,13 +316,13 @@ const initializeSockets = (io) => {
                 try {
                     const CallHistory = require('../models/call_history_model');
 
-                    if (target.data.currentCallId) {
-                        await CallHistory.findByIdAndUpdate(target.data.currentCallId, {
+                    if (callerSock?.data?.currentCallId) {
+                        await CallHistory.findByIdAndUpdate(callerSock.data.currentCallId, {
                             status: 'declined',
                             ended_at: new Date()
                         });
                         console.log(`[Socket] Call record updated to declined`);
-                        delete target.data.currentCallId;
+                        delete callerSock.data.currentCallId;
                     }
                 } catch (error) {
                     console.error('[Socket] Error updating call record:', error);
@@ -340,7 +339,7 @@ const initializeSockets = (io) => {
                 clearTimeout(socket.data.callRingTimeout);
                 delete socket.data.callRingTimeout;
             }
-            const target = getSocketByUserId(to);
+            const target = await getSocketByUserId(to);
             if (target?.data?.callRingTimeout) {
                 clearTimeout(target.data.callRingTimeout);
                 delete target.data.callRingTimeout;
@@ -397,7 +396,7 @@ const initializeSockets = (io) => {
                             console.log(`[Socket] ✓ Missed call notification doc created for ${targetUserId}`);
 
                             // Emit real-time missed call event so recipient can update their badge
-                            const targetSocket = getSocketByUserId(targetUserId);
+                            const targetSocket = await getSocketByUserId(targetUserId);
 
                             if (targetSocket) {
                                 targetSocket.emit('missed-call-received', {
@@ -445,7 +444,7 @@ const initializeSockets = (io) => {
                 clearTimeout(socket.data.callRingTimeout);
                 delete socket.data.callRingTimeout;
             }
-            const target = getSocketByUserId(to);
+            const target = await getSocketByUserId(to);
             if (target) {
                 target.emit('call-cancel', { from: socket.data.userId });
             } else {
@@ -475,9 +474,9 @@ const initializeSockets = (io) => {
             }
         });
 
-        socket.on('call-busy', ({ to }) => {
+        socket.on('call-busy', async ({ to }) => {
             console.log(`[Socket] Call busy from ${socket.data.userId} to ${to}`);
-            const target = getSocketByUserId(to);
+            const target = await getSocketByUserId(to);
             if (target) {
                 target.emit('call-busy', { from: socket.data.userId });
             }
