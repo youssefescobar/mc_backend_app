@@ -9,6 +9,7 @@ const QRCode = require('qrcode');
 const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const { sendSuccess, sendError, sendServerError } = require('../utils/response_helpers');
+const cache = require('../services/cacheService');
 
 const toObjectId = (value) => {
     if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
@@ -16,6 +17,66 @@ const toObjectId = (value) => {
 };
 
 const normalizeString = (value) => String(value || '').trim();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CACHE HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Invalidate all cache entries related to a group
+ */
+async function invalidateGroupCache(groupId) {
+    await Promise.all([
+        cache.delete(cache.key('group', groupId)),
+        cache.delete(cache.key('group:members', groupId)),
+        cache.delete(cache.key('group:resources', groupId))
+    ]);
+}
+
+/**
+ * Invalidate user's groups cache (when they're added/removed from groups)
+ */
+async function invalidateUserGroupsCache(userId) {
+    await cache.deletePattern(`user:${userId}:groups*`);
+}
+
+/**
+ * Get cached hotel by ID
+ */
+async function getCachedHotel(hotelId) {
+    return await cache.getOrSet(
+        cache.key('hotel', hotelId),
+        async () => await Hotel.findById(hotelId).lean(),
+        cache.TTL.GROUP
+    );
+}
+
+/**
+ * Get cached bus by ID
+ */
+async function getCachedBus(busId) {
+    return await cache.getOrSet(
+        cache.key('bus', busId),
+        async () => await Bus.findById(busId).lean(),
+        cache.TTL.GROUP
+    );
+}
+
+/**
+ * Get cached group IDs for a moderator (for quick lookup)
+ */
+async function getCachedModeratorGroupIds(userId) {
+    return await cache.getOrSet(
+        cache.key('user', `${userId}:groups:moderator`),
+        async () => {
+            const groups = await Group.find({ moderator_ids: userId })
+                .select('_id name')
+                .lean();
+            return groups.map(g => ({ id: g._id.toString(), name: g.name }));
+        },
+        120 // 2 minute TTL
+    );
+}
 
 // Get a single group by ID (moderator/admin only)
 exports.get_single_group = async (req, res) => {
@@ -922,6 +983,24 @@ exports.get_group_resource_options = async (req, res) => {
         const group_id = toObjectId(req.params.group_id);
         if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
+        // Try to get from cache first
+        const cacheKey = cache.key('group:resources', group_id.toString());
+        const cachedResources = await cache.get(cacheKey);
+        
+        if (cachedResources) {
+            // Still need to verify authorization
+            const group = await Group.findById(group_id).select('moderator_ids').lean();
+            if (!group) return sendError(res, 404, 'Group not found');
+            
+            const is_admin = req.user.role === 'admin';
+            const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+            if (!is_admin && !is_group_moderator) {
+                return sendError(res, 403, 'Not authorized to view this group');
+            }
+            
+            return sendSuccess(res, 200, null, cachedResources);
+        }
+
         const group = await Group.findById(group_id)
             .select('_id moderator_ids assigned_hotel_ids assigned_bus_ids');
 
@@ -940,10 +1019,12 @@ exports.get_group_resource_options = async (req, res) => {
             Bus.find({ _id: { $in: group.assigned_bus_ids || [] }, active: true }).sort({ destination: 1, departure_time: 1 }).lean()
         ]);
 
-        sendSuccess(res, 200, null, {
-            hotels,
-            buses,
-        });
+        const resources = { hotels, buses };
+        
+        // Cache for 3 minutes
+        await cache.set(cacheKey, resources, cache.TTL.GROUP);
+
+        sendSuccess(res, 200, null, resources);
     } catch (error) {
         sendServerError(res, logger, 'Get group resource options error', error);
     }

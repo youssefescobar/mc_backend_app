@@ -55,6 +55,11 @@ const schemas = {
         message: Joi.string().optional().max(500)
     }),
 
+    'sos_cancel': Joi.object({
+        groupId: Joi.string().required().length(24).hex(),
+        pilgrimId: Joi.string().required().length(24).hex()
+    }),
+
     // Navigation beacons
     'mod_nav_beacon': Joi.object({
         moderatorId: Joi.string().required().length(24).hex(),

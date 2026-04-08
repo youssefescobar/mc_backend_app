@@ -290,4 +290,10 @@ user_schema.methods.updateLocation = function(latitude, longitude, battery) {
     return this.save();
 };
 
+// Additional indexes for performance
+user_schema.index({ email: 1 });
+user_schema.index({ phone_number: 1 });
+user_schema.index({ is_online: 1, last_active_at: -1 });
+user_schema.index({ user_type: 1, active: 1 });
+
 module.exports = mongoose.model('User', user_schema);

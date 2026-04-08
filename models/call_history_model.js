@@ -56,5 +56,6 @@ const callHistorySchema = new mongoose.Schema({
 // Index for faster queries
 callHistorySchema.index({ caller_id: 1, createdAt: -1 });
 callHistorySchema.index({ receiver_id: 1, createdAt: -1 });
+callHistorySchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('CallHistory', callHistorySchema);

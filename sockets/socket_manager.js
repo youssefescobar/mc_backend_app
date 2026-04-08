@@ -1,7 +1,74 @@
 const User = require('../models/user_model');
+const Group = require('../models/group_model');
+const CallHistory = require('../models/call_history_model');
+const Notification = require('../models/notification_model');
+const { sendPushNotification } = require('../services/pushNotificationService');
 const { logger } = require('../config/logger');
 const rateLimiter = require('../middleware/socket_rate_limiter');
 const { validateSocketEvent } = require('../middleware/socket_validation');
+const cache = require('../services/cacheService');
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CACHE HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get user from cache or database
+ * @param {string} userId - User ID
+ * @param {string} selectFields - Optional fields to select (e.g., 'fcm_token full_name')
+ * @returns {Promise<Object|null>} User object or null
+ */
+async function getCachedUser(userId, selectFields = null) {
+    // Use field-specific cache key if selecting specific fields
+    const cacheKey = selectFields 
+        ? cache.key('user', `${userId}:${selectFields.replace(/\s+/g, ',')}`)
+        : cache.key('user', userId);
+    
+    return await cache.getOrSet(
+        cacheKey,
+        async () => {
+            let query = User.findById(userId);
+            if (selectFields) {
+                query = query.select(selectFields);
+            }
+            return await query.lean();
+        },
+        cache.TTL.USER // 5 minutes
+    );
+}
+
+/**
+ * Get group from cache or database
+ * @param {string} groupId - Group ID
+ * @returns {Promise<Object|null>} Group object or null
+ */
+async function getCachedGroup(groupId) {
+    return await cache.getOrSet(
+        cache.key('group', groupId),
+        async () => await Group.findById(groupId).lean(),
+        cache.TTL.GROUP // 3 minutes
+    );
+}
+
+/**
+ * Get group members (pilgrim IDs) from cache
+ * @param {string} groupId - Group ID
+ * @returns {Promise<string[]>} Array of pilgrim IDs
+ */
+async function getCachedGroupMembers(groupId) {
+    return await cache.getOrSet(
+        cache.key('group:members', groupId),
+        async () => {
+            const group = await Group.findById(groupId).select('pilgrim_ids moderator_ids').lean();
+            if (!group) return [];
+            return {
+                pilgrimIds: (group.pilgrim_ids || []).map(id => id.toString()),
+                moderatorIds: (group.moderator_ids || []).map(id => id.toString())
+            };
+        },
+        cache.TTL.GROUP
+    );
+}
 
 const initializeSockets = (io) => {
     io.on('connection', (socket) => {
@@ -18,6 +85,9 @@ const initializeSockets = (io) => {
         User.findByIdAndUpdate(userId, { 
             is_online: true, 
             last_active_at: new Date() 
+        }).then(() => {
+            // Invalidate user cache since online status changed
+            cache.delete(cache.key('user', userId));
         }).catch(err => {
             logger.error(`[Socket] Error updating online status for ${userId}:`, err);
         });
@@ -109,9 +179,13 @@ const initializeSockets = (io) => {
 
         // ── Location Updates ───────────────────────────────────────────────────
         socket.on('update_location', async (data) => {
-            const { groupId, pilgrimId, battery_percent } = data;
+            // Rate limit: max 60 location updates per minute (1 per second)
+            const validated = validateAndRateLimit('update_location', data, 60);
+            if (!validated) return;
+            
+            const { groupId, pilgrimId, battery_percent } = validated;
             if (groupId) {
-                socket.to(`group_${groupId}`).emit('location_update', data);
+                socket.to(`group_${groupId}`).emit('location_update', validated);
 
                 if (battery_percent !== undefined) {
                     const pilgrimSocket = await getSocketByUserId(pilgrimId);
@@ -124,10 +198,14 @@ const initializeSockets = (io) => {
 
         // ── SOS Alerts ────────────────────────────────────────────────────────
         socket.on('sos_alert', (data) => {
-            const { groupId } = data;
+            // Rate limit: max 5 SOS alerts per minute (prevent spam)
+            const validated = validateAndRateLimit('sos_alert', data, 5);
+            if (!validated) return;
+            
+            const { groupId, pilgrimId } = validated;
             if (groupId) {
-                io.to(`group_${groupId}`).emit('sos-alert-received', data);
-                console.log(`[Socket] SOS Alert from ${data.pilgrimId} in group_${groupId}`);
+                io.to(`group_${groupId}`).emit('sos-alert-received', validated);
+                logger.info(`[Socket] SOS Alert from ${pilgrimId} in group_${groupId}`);
             }
         });
 
@@ -145,22 +223,19 @@ const initializeSockets = (io) => {
             const { to, channelName } = validated;
             logger.info(`[Socket] Call offer from ${userId} to ${to}`);
 
-            const { sendPushNotification } = require('../services/pushNotificationService');
-            const CallHistory = require('../models/call_history_model');
-
             try {
-                // Fetch caller info (don't use .select() to preserve virtual 'role' property)
-                const caller = await User.findById(socket.data.userId);
+                // Fetch caller info from cache
+                const caller = await getCachedUser(socket.data.userId);
 
                 const callerInfo = {
                     id: socket.data.userId,
                     name: caller?.full_name || 'Unknown',
                     role: caller?.user_type || 'Unknown'
                 };
-                console.log(`[Socket] Caller info:`, callerInfo);
+                logger.debug(`[Socket] Caller info: ${JSON.stringify(callerInfo)}`);
 
-                // Fetch recipient info (for FCM token)
-                const recipient = await User.findById(to);
+                // Fetch recipient info from cache (for FCM token)
+                const recipient = await getCachedUser(to);
 
                 // Create call history record
                 const callRecord = await CallHistory.create({
@@ -172,7 +247,7 @@ const initializeSockets = (io) => {
                     status: 'ringing'
                 });
                 socket.data.currentCallId = callRecord._id;
-                console.log(`[Socket] Call record created: ${callRecord._id}`);
+                logger.debug(`[Socket] Call record created: ${callRecord._id}`);
 
                 // ── Server-side ring timeout ─────────────────────────────────
                 // When the recipient's app is killed, the Flutter engine may not
@@ -188,7 +263,7 @@ const initializeSockets = (io) => {
                         const record = await CallHistory.findById(callRecordId);
                         if (!record || record.status !== 'ringing') return;
 
-                        console.log(`[Socket] ⏰ Ring timeout for call ${callRecordId} — marking as missed`);
+                        logger.info(`[Socket] ⏰ Ring timeout for call ${callRecordId} — marking as missed`);
 
                         await CallHistory.findByIdAndUpdate(callRecordId, {
                             status: 'missed',
@@ -198,13 +273,13 @@ const initializeSockets = (io) => {
                         // Tell the caller the call was not answered
                         const callerRoom = `user_${callerId}`;
                         io.to(callerRoom).emit('call-declined', { from: receiverId });
-                        console.log(`[Socket] ⏰ Emitted call-declined to caller ${callerId}`);
+                        logger.info(`[Socket] ⏰ Emitted call-declined to caller ${callerId}`);
 
                         // ── Also send a silent FCM to the MODERATOR (caller) as a guaranteed fallback.
                         // Even if the socket.emit above is missed (e.g. brief reconnect), the FCM
                         // wakes up the Flutter foreground handler and stops the ringing.
                         try {
-                            const callerUser = await User.findById(callerId).select('fcm_token full_name');
+                            const callerUser = await getCachedUser(callerId, 'fcm_token full_name');
                             if (callerUser?.fcm_token) {
                                 await sendPushNotification(
                                     [callerUser.fcm_token],
@@ -217,10 +292,10 @@ const initializeSockets = (io) => {
                                     },
                                     true // high priority data-only
                                 );
-                                console.log(`[Socket] ⏰ call_declined FCM sent to moderator ${callerUser.full_name}`);
+                                logger.info(`[Socket] ⏰ call_declined FCM sent to moderator ${callerUser.full_name}`);
                             }
                         } catch (fcmCallerErr) {
-                            console.error('[Socket] ⏰ Error sending call_declined FCM to caller:', fcmCallerErr);
+                            logger.error('[Socket] ⏰ Error sending call_declined FCM to caller:', fcmCallerErr);
                         }
 
                         // Clean up caller socket's currentCallId
@@ -232,7 +307,7 @@ const initializeSockets = (io) => {
 
                         // Dismiss the native call screen on receiver's device(s)
                         try {
-                            const rcpt = await User.findById(receiverId).select('fcm_token full_name');
+                            const rcpt = await getCachedUser(receiverId, 'fcm_token full_name');
                             if (rcpt?.fcm_token) {
                                 await sendPushNotification(
                                     [rcpt.fcm_token],
@@ -241,15 +316,14 @@ const initializeSockets = (io) => {
                                     { type: 'call_cancel', callerId },
                                     true
                                 );
-                                console.log(`[Socket] ⏰ call_cancel FCM sent to ${rcpt.full_name}`);
+                                logger.info(`[Socket] ⏰ call_cancel FCM sent to ${rcpt.full_name}`);
                             }
                         } catch (fcmErr) {
-                            console.error('[Socket] ⏰ Error sending timeout call_cancel FCM:', fcmErr);
+                            logger.error('[Socket] ⏰ Error sending timeout call_cancel FCM:', fcmErr);
                         }
 
                         // Create missed-call notification for receiver
                         try {
-                            const Notification = require('../models/notification_model');
                             await Notification.create({
                                 user_id: receiverId,
                                 type: 'missed_call',
@@ -258,10 +332,10 @@ const initializeSockets = (io) => {
                                 data: { caller_id: callerId, caller_name: callerInfo.name }
                             });
                         } catch (notifErr) {
-                            console.error('[Socket] ⏰ Error creating missed-call notification:', notifErr);
+                            logger.error('[Socket] ⏰ Error creating missed-call notification:', notifErr);
                         }
                     } catch (err) {
-                        console.error('[Socket] ⏰ Ring timeout handler error:', err);
+                        logger.error('[Socket] ⏰ Ring timeout handler error:', err);
                     }
                 }, 30000); // ← 30 s matches the CallKit native ring duration
 
@@ -274,12 +348,12 @@ const initializeSockets = (io) => {
 
                 if (isOnline) {
                     // ── Recipient has active socket ──────────────────────────────
-                    console.log(`[Socket] Recipient ${to} is in room user_${to} — sending call-offer via socket`);
+                    logger.debug(`[Socket] Recipient ${to} is in room user_${to} — sending call-offer via socket`);
                     io.to(`user_${to}`).emit('call-offer', { channelName, from: socket.data.userId, callerInfo });
                 } else {
                     // ── Recipient has no socket (killed/offline) ─────────────────
                     // Send FCM only. The BackgroundNotificationTask + Notifee will show the call UI.
-                    console.log(`[Socket] Recipient ${to} has no socket — sending FCM for call notification`);
+                    logger.debug(`[Socket] Recipient ${to} has no socket — sending FCM for call notification`);
 
                     if (recipient?.fcm_token) {
                         await sendPushNotification(
@@ -296,21 +370,21 @@ const initializeSockets = (io) => {
                             },
                             true // high priority
                         );
-                        console.log(`[Socket] ✓ Call FCM sent to ${recipient.full_name}`);
+                        logger.info(`[Socket] ✓ Call FCM sent to ${recipient.full_name}`);
                     } else {
-                        console.log(`[Socket] Recipient ${to} has no FCM token — call may be missed`);
+                        logger.warn(`[Socket] Recipient ${to} has no FCM token — call may be missed`);
                     }
                 }
 
             } catch (error) {
-                console.error('[Socket] Error in call-offer handler:', error);
+                logger.error('[Socket] Error in call-offer handler:', error);
                 // Do NOT fallback with another emit — it could duplicate the call
                 // if the try block partially succeeded.
             }
         });
 
         socket.on('call-answer', async ({ to }) => {
-            console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
+            logger.debug(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
             // Clear the caller's ring timeout — the call was answered
             const callerSocket = await getSocketByUserId(to);
             if (callerSocket?.data?.callRingTimeout) {
@@ -319,29 +393,28 @@ const initializeSockets = (io) => {
             }
             const target = callerSocket || await getSocketByUserId(to);
             if (target) {
-                console.log(`[Socket] Relaying call-answer to socket ${target.id}`);
+                logger.debug(`[Socket] Relaying call-answer to socket ${target.id}`);
                 target.emit('call-answer', { from: socket.data.userId });
 
                 // Update call record to in-progress
                 try {
-                    const CallHistory = require('../models/call_history_model');
                     if (target.data.currentCallId) {
                         await CallHistory.findByIdAndUpdate(target.data.currentCallId, {
                             status: 'in-progress',
                             started_at: new Date()
                         });
-                        console.log(`[Socket] Call record updated to in-progress`);
+                        logger.debug(`[Socket] Call record updated to in-progress`);
                     }
                 } catch (error) {
-                    console.error('[Socket] Error updating call record:', error);
+                    logger.error('[Socket] Error updating call record:', error);
                 }
             } else {
-                console.log(`[Socket] Target user ${to} not found for call answer`);
+                logger.debug(`[Socket] Target user ${to} not found for call answer`);
             }
         });
 
         socket.on('call-declined', async ({ to }) => {
-            console.log(`[Socket] Call declined from ${socket.data.userId} to ${to}`);
+            logger.debug(`[Socket] Call declined from ${socket.data.userId} to ${to}`);
             // Clear the caller's ring timeout — decline was explicit
             const callerSock = await getSocketByUserId(to);
             if (callerSock?.data?.callRingTimeout) {
@@ -351,7 +424,7 @@ const initializeSockets = (io) => {
             const callerRoom = `user_${to}`;
             const callerSockets = await io.in(callerRoom).fetchSockets();
             if (callerSockets.length > 0) {
-                console.log(`[Socket] Relaying call-declined to ${callerSockets.length} caller socket(s) in ${callerRoom}`);
+                logger.debug(`[Socket] Relaying call-declined to ${callerSockets.length} caller socket(s) in ${callerRoom}`);
                 io.to(callerRoom).emit('call-declined', { from: socket.data.userId });
 
                 // Only update the call record status — do NOT create a missed-call
@@ -360,26 +433,24 @@ const initializeSockets = (io) => {
                 // avoiding duplicate notifications when the receiver's CallKit
                 // dismisses and triggers an automatic decline signal.
                 try {
-                    const CallHistory = require('../models/call_history_model');
-
                     if (callerSock?.data?.currentCallId) {
                         await CallHistory.findByIdAndUpdate(callerSock.data.currentCallId, {
                             status: 'declined',
                             ended_at: new Date()
                         });
-                        console.log(`[Socket] Call record updated to declined`);
+                        logger.debug(`[Socket] Call record updated to declined`);
                         delete callerSock.data.currentCallId;
                     }
                 } catch (error) {
-                    console.error('[Socket] Error updating call record:', error);
+                    logger.error('[Socket] Error updating call record:', error);
                 }
             } else {
-                console.log(`[Socket] Caller user ${to} not found for call-declined`);
+                logger.debug(`[Socket] Caller user ${to} not found for call-declined`);
             }
         });
 
         socket.on('call-end', async ({ to }) => {
-            console.log(`[Socket] Call end from ${socket.data.userId} to ${to}`);
+            logger.debug(`[Socket] Call end from ${socket.data.userId} to ${to}`);
             // Clear ring timeout on both sides
             if (socket.data.callRingTimeout) {
                 clearTimeout(socket.data.callRingTimeout);
@@ -395,9 +466,6 @@ const initializeSockets = (io) => {
             }
 
             try {
-                const CallHistory = require('../models/call_history_model');
-                const { sendPushNotification } = require('../services/pushNotificationService');
-
                 if (socket.data.currentCallId) {
                     const callRecord = await CallHistory.findById(socket.data.currentCallId);
                     if (callRecord) {
@@ -416,19 +484,17 @@ const initializeSockets = (io) => {
                             ended_at: new Date(),
                             duration
                         });
-                        console.log(`[Socket] Call record updated: ${isMissed ? 'missed' : 'completed'}, duration: ${duration}s`);
+                        logger.debug(`[Socket] Call record updated: ${isMissed ? 'missed' : 'completed'}, duration: ${duration}s`);
 
                         if (isMissed) {
-                            // Fetch caller name first
+                            // Fetch caller name from cache
                             let callerName = 'Someone';
                             if (socket.data.userId === callRecord.caller_id.toString()) {
-                                let me = await User.findById(socket.data.userId).select('full_name');
-                                if (!me) me = await Pilgrim.findById(socket.data.userId).select('full_name');
+                                let me = await getCachedUser(socket.data.userId, 'full_name');
                                 callerName = me?.full_name || 'Unknown';
                             }
 
                             // ── Create a persistent Notification doc for the recipient ──
-                            const Notification = require('../models/notification_model');
                             await Notification.create({
                                 user_id: targetUserId,
                                 type: 'missed_call',
@@ -439,7 +505,7 @@ const initializeSockets = (io) => {
                                     caller_name: callerName
                                 }
                             });
-                            console.log(`[Socket] ✓ Missed call notification doc created for ${targetUserId}`);
+                            logger.info(`[Socket] ✓ Missed call notification doc created for ${targetUserId}`);
 
                             // Emit real-time missed call event so recipient can update their badge
                             const targetSocket = await getSocketByUserId(targetUserId);
@@ -450,12 +516,11 @@ const initializeSockets = (io) => {
                                     callerId: socket.data.userId,
                                     callerName
                                 });
-                                console.log(`[Socket] ✓ Missed call event emitted to ${targetUserId}`);
+                                logger.info(`[Socket] ✓ Missed call event emitted to ${targetUserId}`);
                             }
 
                             // Also send push for missed call (standard notification, not full-screen)
-                            let targetUser = await User.findById(targetUserId).select('fcm_token full_name');
-                            if (!targetUser) targetUser = await Pilgrim.findById(targetUserId).select('fcm_token full_name');
+                            let targetUser = await getCachedUser(targetUserId, 'fcm_token full_name');
 
                             if (targetUser?.fcm_token) {
                                 await sendPushNotification(
@@ -469,7 +534,7 @@ const initializeSockets = (io) => {
                                         callerName
                                     }
                                 );
-                                console.log(`[Socket] ✓ Missed call notification sent to ${targetUser.full_name}`);
+                                logger.info(`[Socket] ✓ Missed call notification sent to ${targetUser.full_name}`);
                             }
                         }
 
@@ -477,14 +542,14 @@ const initializeSockets = (io) => {
                     }
                 }
             } catch (error) {
-                console.error('[Socket] Error updating call record on call-end:', error);
+                logger.error('[Socket] Error updating call record on call-end:', error);
             }
         });
 
         // call-cancel: caller hung up while recipient had a Notifee notification open
         // This tells the recipient's app to dismiss the incoming call notification/UI
         socket.on('call-cancel', async ({ to }) => {
-            console.log(`[Socket] Call cancelled by ${socket.data.userId}, notifying ${to}`);
+            logger.debug(`[Socket] Call cancelled by ${socket.data.userId}, notifying ${to}`);
             // Clear ring timeout — caller cancelled
             if (socket.data.callRingTimeout) {
                 clearTimeout(socket.data.callRingTimeout);
@@ -497,8 +562,7 @@ const initializeSockets = (io) => {
                 // Recipient has no active socket (killed/offline) — send high-priority
                 // data-only FCM so Flutter background handler can dismiss CallKit UI.
                 try {
-                    const { sendPushNotification } = require('../services/pushNotificationService');
-                    const recipient = await User.findById(to).select('fcm_token full_name');
+                    const recipient = await getCachedUser(to, 'fcm_token full_name');
                     if (recipient?.fcm_token) {
                         await sendPushNotification(
                             [recipient.fcm_token],
@@ -510,18 +574,18 @@ const initializeSockets = (io) => {
                             },
                             true
                         );
-                        console.log(`[Socket] ✓ call_cancel FCM sent to ${recipient.full_name}`);
+                        logger.info(`[Socket] ✓ call_cancel FCM sent to ${recipient.full_name}`);
                     } else {
-                        console.log(`[Socket] Recipient ${to} has no FCM token for call_cancel`);
+                        logger.debug(`[Socket] Recipient ${to} has no FCM token for call_cancel`);
                     }
                 } catch (err) {
-                    console.error('[Socket] Error sending call_cancel FCM:', err);
+                    logger.error('[Socket] Error sending call_cancel FCM:', err);
                 }
             }
         });
 
         socket.on('call-busy', async ({ to }) => {
-            console.log(`[Socket] Call busy from ${socket.data.userId} to ${to}`);
+            logger.debug(`[Socket] Call busy from ${socket.data.userId} to ${to}`);
             const target = await getSocketByUserId(to);
             if (target) {
                 target.emit('call-busy', { from: socket.data.userId });
@@ -530,15 +594,21 @@ const initializeSockets = (io) => {
 
         // ── Moderator Navigation Beacon ──────────────────────────────────────────
         socket.on('mod_nav_beacon', (data) => {
-            const { groupId, enabled, lat, lng, moderatorId, moderatorName } = data;
-            if (!groupId) return;
+            // Rate limit: max 30 beacon updates per minute
+            const validated = validateAndRateLimit('mod_nav_beacon', data, 30);
+            if (!validated) return;
+            
+            const { groupId, enabled, lat, lng, moderatorId, moderatorName } = validated;
+            
             // Ensure moderator is in the group room so they receive future events
             socket.join(`group_${groupId}`);
             socket.data.groupId = groupId;
+            
             // Store beacon state for auto-disable on disconnect
             socket.data.navBeacon = enabled
                 ? { groupId, moderatorId: moderatorId || socket.data.userId, moderatorName: moderatorName || 'Moderator', lat, lng }
                 : null;
+            
             // Relay to all other members of the group
             socket.to(`group_${groupId}`).emit('mod_nav_beacon', {
                 moderatorId: moderatorId || socket.data.userId,
@@ -547,19 +617,22 @@ const initializeSockets = (io) => {
                 lat: enabled ? lat : null,
                 lng: enabled ? lng : null,
             });
-            console.log(`[Socket] Nav beacon: ${moderatorId} group_${groupId} -> ${enabled}`);
+            logger.debug(`[Socket] Nav beacon: ${moderatorId} group_${groupId} -> ${enabled}`);
         });
 
         // ── Pilgrim SOS Cancel ───────────────────────────────────────
         socket.on('sos_cancel', (data) => {
-            const { groupId, pilgrimId } = data;
-            if (!groupId) return;
+            // Rate limit: max 5 SOS cancels per minute
+            const validated = validateAndRateLimit('sos_cancel', data, 5);
+            if (!validated) return;
+            
+            const { groupId, pilgrimId } = validated;
             socket.to(`group_${groupId}`).emit('sos-alert-cancelled', {
                 pilgrim_id: pilgrimId || socket.data.userId,
                 group_id: groupId,
                 timestamp: new Date(),
             });
-            console.log(`[Socket] SOS cancelled by ${pilgrimId} in group_${groupId}`);
+            logger.info(`[Socket] SOS cancelled by ${pilgrimId} in group_${groupId}`);
         });
 
         // ── Disconnect ────────────────────────────────────────────────────────
@@ -599,6 +672,9 @@ const initializeSockets = (io) => {
                             is_online: false,
                             last_active_at: new Date()
                         });
+                        
+                        // Invalidate user cache since online status changed
+                        await cache.delete(cache.key('user', userId));
 
                         // Notify group members if user was in a group
                         if (groupId) {

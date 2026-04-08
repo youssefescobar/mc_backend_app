@@ -11,4 +11,10 @@ const group_schema = new mongoose.Schema({
     allow_pilgrim_navigation: { type: Boolean, default: false } // Allow pilgrims to navigate to moderator location
 }, { timestamps: true });
 
+// Indexes for efficient queries
+group_schema.index({ moderator_ids: 1 });
+group_schema.index({ pilgrim_ids: 1 });
+group_schema.index({ created_by: 1 });
+group_schema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('Group', group_schema);

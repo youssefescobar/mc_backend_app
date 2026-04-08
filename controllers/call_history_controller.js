@@ -1,29 +1,41 @@
 const CallHistory = require('../models/call_history_model');
 const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
+const cache = require('../services/cacheService');
 
 const toObjectId = (value) => {
     if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
     return new mongoose.Types.ObjectId(String(value));
 };
 
-// Get call history for current user
+// Helper to invalidate user's call history cache
+async function invalidateCallHistoryCache(userId) {
+    await cache.deletePattern(`call_history:${userId}*`);
+}
+
+// Get call history for current user (cached for 60s)
 exports.get_call_history = async (req, res) => {
     try {
         const userId = toObjectId(req.user.id);
         if (!userId) return res.status(400).json({ success: false, message: 'Invalid user identifier' });
 
-        // Find calls where user is either caller or receiver
-        const calls = await CallHistory.find({
-            $or: [
-                { caller_id: userId },
-                { receiver_id: userId }
-            ]
-        })
-            .populate('caller_id', 'full_name user_type phone_number profile_picture')
-            .populate('receiver_id', 'full_name user_type phone_number profile_picture')
-            .sort({ createdAt: -1 })
-            .limit(100); // Limit to last 100 calls
+        const calls = await cache.getOrSet(
+            cache.key('call_history', `${userId}:list`),
+            async () => {
+                return await CallHistory.find({
+                    $or: [
+                        { caller_id: userId },
+                        { receiver_id: userId }
+                    ]
+                })
+                    .populate('caller_id', 'full_name user_type phone_number profile_picture')
+                    .populate('receiver_id', 'full_name user_type phone_number profile_picture')
+                    .sort({ createdAt: -1 })
+                    .limit(100)
+                    .lean();
+            },
+            60 // 60 second TTL
+        );
 
         logger.info(`[CallHistory] Fetched ${calls.length} calls for user ${userId}`);
         res.json(calls);
@@ -61,16 +73,22 @@ exports.create_call_record = async (req, res) => {
     }
 };
 
-// Get unread missed call count
+// Get unread missed call count (cached for 30s)
 exports.get_unread_count = async (req, res) => {
     try {
         const userId = toObjectId(req.user.id);
         if (!userId) return res.status(400).json({ success: false, message: 'Invalid user identifier' });
-        const count = await CallHistory.countDocuments({
-            receiver_id: userId,
-            status: 'missed',
-            is_read: false
-        });
+        
+        const count = await cache.getOrSet(
+            cache.key('call_history', `${userId}:missed_unread`),
+            async () => await CallHistory.countDocuments({
+                receiver_id: userId,
+                status: 'missed',
+                is_read: false
+            }),
+            30 // 30 second TTL for counts
+        );
+        
         res.json({ count });
     } catch (error) {
         logger.error(`Error fetching unread count: ${error.message}`);
@@ -87,6 +105,10 @@ exports.mark_read = async (req, res) => {
             { receiver_id: userId, status: 'missed', is_read: false },
             { is_read: true }
         );
+        
+        // Invalidate cache
+        await invalidateCallHistoryCache(userId);
+        
         res.json({ success: true });
     } catch (error) {
         logger.error(`Error marking calls as read: ${error.message}`);

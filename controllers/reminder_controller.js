@@ -2,11 +2,20 @@ const Reminder = require('../models/reminder_model');
 const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const scheduler = require('../services/reminderScheduler');
+const cache = require('../services/cacheService');
 
 const toObjectId = (value) => {
     if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
     return new mongoose.Types.ObjectId(String(value));
 };
+
+// Helper to invalidate reminder cache for a group
+async function invalidateReminderCache(groupId) {
+    if (groupId) {
+        await cache.delete(cache.key('reminders', `group:${groupId}`));
+    }
+    await cache.deletePattern('reminders:all*');
+}
 
 // ── Create Reminder ───────────────────────────────────────────────────────────
 exports.create_reminder = async (req, res) => {
@@ -58,6 +67,11 @@ exports.create_reminder = async (req, res) => {
         // Hand off to the scheduler
         scheduler.add(reminder);
 
+        // Invalidate cache for affected groups
+        for (const gid of safe_group_ids) {
+            await invalidateReminderCache(gid.toString());
+        }
+
         logger.info(`[Reminder] Created ${reminder._id} by ${req.user.id} for target ${target_type}`);
         res.status(201).json({ success: true, reminder });
     } catch (err) {
@@ -66,21 +80,30 @@ exports.create_reminder = async (req, res) => {
     }
 };
 
-// ── List Reminders ────────────────────────────────────────────────────────────
+// ── List Reminders (cached for 60s) ───────────────────────────────────────────
 exports.get_reminders = async (req, res) => {
     try {
         const group_id = toObjectId(req.query.group_id);
-        const query = {};
+        const cacheKey = group_id 
+            ? cache.key('reminders', `group:${group_id}`)
+            : cache.key('reminders', 'all');
         
-        if (group_id) {
-            query.group_ids = group_id;
-        }
-
-        const reminders = await Reminder.find(query)
-            .populate('pilgrim_id', 'full_name')
-            .populate('created_by', 'full_name')
-            .sort({ scheduled_at: -1 })
-            .limit(100);
+        const reminders = await cache.getOrSet(
+            cacheKey,
+            async () => {
+                const query = {};
+                if (group_id) {
+                    query.group_ids = group_id;
+                }
+                return await Reminder.find(query)
+                    .populate('pilgrim_id', 'full_name')
+                    .populate('created_by', 'full_name')
+                    .sort({ scheduled_at: -1 })
+                    .limit(100)
+                    .lean();
+            },
+            60 // 60 second TTL
+        );
 
         res.json({ success: true, reminders });
     } catch (err) {
@@ -111,6 +134,13 @@ exports.cancel_reminder = async (req, res) => {
         // Remove from scheduler
         scheduler.cancel(id);
 
+        // Invalidate cache for affected groups
+        if (reminder.group_ids?.length) {
+            for (const gid of reminder.group_ids) {
+                await invalidateReminderCache(gid.toString());
+            }
+        }
+
         logger.info(`[Reminder] Cancelled ${id} by ${req.user.id}`);
         res.json({ success: true, reminder });
     } catch (err) {
@@ -136,6 +166,13 @@ exports.delete_reminder = async (req, res) => {
 
         // Remove from scheduler (no-op if already fired/gone)
         scheduler.cancel(id);
+
+        // Invalidate cache for affected groups
+        if (reminder.group_ids?.length) {
+            for (const gid of reminder.group_ids) {
+                await invalidateReminderCache(gid.toString());
+            }
+        }
 
         logger.info(`[Reminder] Hard-deleted ${id} by ${req.user.id}`);
         res.json({ success: true, message: 'Reminder deleted' });

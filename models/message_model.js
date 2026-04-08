@@ -66,4 +66,10 @@ const message_schema = new mongoose.Schema({
     }
 });
 
+// Indexes for efficient queries
+message_schema.index({ group_id: 1, created_at: -1 });
+message_schema.index({ sender_id: 1, created_at: -1 });
+message_schema.index({ recipient_id: 1 });
+message_schema.index({ type: 1 });
+
 module.exports = mongoose.model('Message', message_schema);

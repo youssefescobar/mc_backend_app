@@ -141,6 +141,31 @@ app.use('/api/reminders', reminder_routes);
 
 app.get('/', (req, res) => res.send("Hajj App Backend Running"));
 
+// Health check endpoint for Docker/K8s
+app.get('/health', async (req, res) => {
+    try {
+        const mongoState = mongoose.connection.readyState;
+        const redisOk = pubClient.status === 'ready';
+        
+        if (mongoState !== 1 || !redisOk) {
+            return res.status(503).json({
+                status: 'unhealthy',
+                mongo: mongoState === 1 ? 'connected' : 'disconnected',
+                redis: redisOk ? 'connected' : 'disconnected'
+            });
+        }
+        
+        res.json({ 
+            status: 'healthy',
+            mongo: 'connected',
+            redis: 'connected',
+            uptime: process.uptime()
+        });
+    } catch (err) {
+        res.status(503).json({ status: 'unhealthy', error: err.message });
+    }
+});
+
 // 404 Handler - Must be after all routes
 app.use((req, res) => {
     res.status(404).json({ 
@@ -174,6 +199,11 @@ const gracefulShutdown = async ({ signal = 'SIGTERM', forwardSignal = false } = 
         await pubClient.quit();
         await subClient.quit();
         logger.info('Redis adapter disconnected');
+        
+        // Disconnect cache service
+        const cache = require('./services/cacheService');
+        await cache.disconnect();
+        logger.info('Cache service disconnected');
 
         // For nodemon restarts: release resources first, then re-emit signal
         // so nodemon can start the new instance safely.

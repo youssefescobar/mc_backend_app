@@ -8,6 +8,7 @@ const { logger } = require('../config/logger');
 const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
 const { sendSuccess, sendError, sendValidationError, sendServerError } = require('../utils/response_helpers');
 const { translateText } = require('../services/translationService');
+const cache = require('../services/cacheService');
 
 const toObjectId = (value) => {
     if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
@@ -17,6 +18,13 @@ const toObjectId = (value) => {
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 /**
+ * Invalidate user profile cache
+ */
+async function invalidateUserCache(userId) {
+    await cache.deletePattern(`user:${userId}*`);
+}
+
+/**
  * Get current user profile
  */
 exports.get_profile = async (req, res) => {
@@ -24,20 +32,32 @@ exports.get_profile = async (req, res) => {
         const user_id = toObjectId(req.user.id);
         if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
-        const user = await User.findById(user_id).select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language');
+        // Try cache first for basic profile
+        const cacheKey = cache.key('user:profile', user_id.toString());
+        let user = await cache.get(cacheKey);
+        
+        if (!user) {
+            user = await User.findById(user_id)
+                .select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language')
+                .lean();
+            
+            if (user) {
+                await cache.set(cacheKey, user, cache.TTL.USER);
+            }
+        }
         
         if (!user) {
             return sendError(res, 404, 'Profile not found');
         }
 
-        // For pilgrims, include moderator request status
+        // For pilgrims, include moderator request status (not cached - changes frequently)
         if (user.user_type === 'pilgrim') {
             const latest_request = await ModeratorRequest.findOne({ pilgrim_id: user_id }).sort({ requested_at: -1 }).select('status');
             const moderator_request_status = latest_request?.status || null;
 
             return res.json({
-                ...user.toObject(),
-                role: user.user_type, // Backward compatibility
+                ...user,
+                role: user.user_type,
                 moderator_request_status,
                 pending_moderator_request: moderator_request_status === 'pending'
             });
@@ -45,8 +65,8 @@ exports.get_profile = async (req, res) => {
 
         // For moderators/admins
         return res.json({
-            ...user.toObject(),
-            role: user.user_type // Backward compatibility
+            ...user,
+            role: user.user_type
         });
     } catch (error) {
         sendServerError(res, logger, 'Get profile error', error);
@@ -81,6 +101,9 @@ exports.update_profile = async (req, res) => {
         if (!updatedUser) {
             return sendError(res, 404, 'Profile not found');
         }
+
+        // Invalidate user cache
+        await invalidateUserCache(user_id.toString());
 
         logger.info(`User profile updated: ${req.user.id}`);
         sendSuccess(res, 200, 'Profile updated successfully', { user: updatedUser });
@@ -175,6 +198,9 @@ exports.update_fcm_token = async (req, res) => {
         }
 
         await User.findByIdAndUpdate(user_id, { fcm_token });
+        
+        // Invalidate user cache (FCM token is cached)
+        await invalidateUserCache(user_id.toString());
 
         sendSuccess(res, 200, 'FCM Token updated');
     } catch (error) {

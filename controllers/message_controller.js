@@ -5,11 +5,21 @@ const mongoose = require('mongoose');
 const { sendPushNotification } = require('../services/pushNotificationService');
 const { translateText } = require('../services/translationService');
 const { logger } = require('../config/logger');
+const cache = require('../services/cacheService');
 
 const toObjectId = (value) => {
     if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
     return new mongoose.Types.ObjectId(String(value));
 };
+
+// Helper to invalidate message-related cache
+async function invalidateMessageCache(groupId, userId = null) {
+    const patterns = [`message:${groupId}*`];
+    if (userId) {
+        patterns.push(`message:${groupId}:${userId}*`);
+    }
+    await Promise.all(patterns.map(p => cache.deletePattern(p)));
+}
 
 // Send a message (Text, Voice, Image, or TTS)
 exports.send_message = async (req, res) => {
@@ -320,7 +330,7 @@ exports.delete_message = async (req, res) => {
     }
 };
 
-// Get unread message count for a pilgrim in a group
+// Get unread message count for a pilgrim in a group (cached for 30s)
 exports.get_unread_count = async (req, res) => {
     try {
         const group_id = toObjectId(req.params.group_id);
@@ -329,11 +339,15 @@ exports.get_unread_count = async (req, res) => {
             return res.status(400).json({ message: "Invalid group or user ID" });
         }
 
-        const count = await Message.countDocuments({
-            group_id,
-            $or: [{ recipient_id: null }, { recipient_id: pilgrimId }],
-            read_by: { $ne: pilgrimId }
-        });
+        const count = await cache.getOrSet(
+            cache.key('message', `${group_id}:${pilgrimId}:unread`),
+            async () => await Message.countDocuments({
+                group_id,
+                $or: [{ recipient_id: null }, { recipient_id: pilgrimId }],
+                read_by: { $ne: pilgrimId }
+            }),
+            30 // 30 second TTL for message counts
+        );
 
         res.json({ success: true, unread_count: count });
     } catch (error) {
@@ -359,6 +373,9 @@ exports.mark_read = async (req, res) => {
             },
             { $addToSet: { read_by: pilgrimId } }
         );
+
+        // Invalidate unread count cache
+        await cache.delete(cache.key('message', `${group_id}:${pilgrimId}:unread`));
 
         res.json({ success: true });
     } catch (error) {

@@ -1,5 +1,11 @@
 const Notification = require('../models/notification_model');
 const { logger } = require('../config/logger');
+const cache = require('../services/cacheService');
+
+// Helper to invalidate user's notification cache
+async function invalidateNotificationCache(userId) {
+    await cache.deletePattern(`notification:${userId}*`);
+}
 
 // Get notifications for current user
 const get_notifications = async (req, res) => {
@@ -44,6 +50,9 @@ const mark_as_read = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Notification not found' });
         }
 
+        // Invalidate cache since count changed
+        await invalidateNotificationCache(user_id);
+
         res.json({
             success: true,
             notification
@@ -63,6 +72,9 @@ const mark_all_read = async (req, res) => {
             { user_id, read: false },
             { read: true }
         );
+
+        // Invalidate cache
+        await invalidateNotificationCache(user_id);
 
         res.json({
             success: true,
@@ -85,6 +97,9 @@ const delete_notification = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Notification not found' });
         }
 
+        // Invalidate cache
+        await invalidateNotificationCache(user_id);
+
         res.json({ success: true, message: 'Notification deleted' });
     } catch (error) {
         logger.error(`Delete notification error: ${error.message}`);
@@ -97,6 +112,10 @@ const delete_read_notifications = async (req, res) => {
     try {
         const user_id = req.user.id;
         await Notification.deleteMany({ user_id, read: true });
+
+        // Invalidate cache
+        await invalidateNotificationCache(user_id);
+
         res.json({ success: true, message: 'Read notifications cleared' });
     } catch (error) {
         logger.error(`Clear read notifications error: ${error.message}`);
@@ -104,11 +123,17 @@ const delete_read_notifications = async (req, res) => {
     }
 };
 
-// Get unread notification count
+// Get unread notification count (cached for 30s)
 const get_unread_count = async (req, res) => {
     try {
         const user_id = req.user.id;
-        const unread_count = await Notification.countDocuments({ user_id, read: false });
+        
+        const unread_count = await cache.getOrSet(
+            cache.key('notification', `${user_id}:unread`),
+            async () => await Notification.countDocuments({ user_id, read: false }),
+            30 // Short TTL (30s) for counts
+        );
+        
         res.json({ success: true, unread_count });
     } catch (error) {
         logger.error(`Get unread count error: ${error.message}`);
@@ -122,5 +147,6 @@ module.exports = {
     mark_all_read,
     delete_notification,
     delete_read_notifications,
-    get_unread_count
+    get_unread_count,
+    invalidateNotificationCache
 };
