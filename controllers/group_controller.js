@@ -46,7 +46,7 @@ exports.get_single_group = async (req, res) => {
 
         // Optimize: Fetch all pilgrims in one query
         const pilgrims = await User.find({ _id: { $in: pilgrim_ids }, user_type: 'pilgrim' })
-            .select('full_name national_id email phone_number medical_history age gender current_latitude current_longitude last_location_update battery_percent active is_online last_active_at')
+            .select('full_name national_id email phone_number medical_history age gender ethnicity hotel_name room_number bus_info visa current_latitude current_longitude last_location_update battery_percent active is_online last_active_at')
             .lean();
 
         const pilgrims_with_details = pilgrims.map(pilgrim => {
@@ -243,7 +243,7 @@ exports.get_my_groups = async (req, res) => {
         let pilgrimsMap = {};
         if (allPilgrimIds.size > 0) {
             const pilgrims = await User.find({ _id: { $in: Array.from(allPilgrimIds) }, user_type: 'pilgrim' })
-                .select('full_name email phone_number national_id medical_history age gender current_latitude current_longitude last_location_update battery_percent active is_online last_active_at')
+                .select('full_name email phone_number national_id medical_history age gender ethnicity hotel_name room_number bus_info visa current_latitude current_longitude last_location_update battery_percent active is_online last_active_at')
                 .lean();
 
             pilgrims.forEach(p => {

@@ -1,4 +1,5 @@
 const Reminder = require('../models/reminder_model');
+const Group = require('../models/group_model');
 const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
 const scheduler = require('../services/reminderScheduler');
@@ -128,11 +129,32 @@ exports.delete_reminder = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid reminder or user identifier' });
         }
 
-        const reminder = await Reminder.findOneAndDelete({ _id: id, created_by: user_id });
+        // First, find the reminder (don't delete yet)
+        const reminder = await Reminder.findById(id);
 
         if (!reminder) {
             return res.status(404).json({ success: false, message: 'Reminder not found' });
         }
+
+        // Check if user is the creator or a moderator of any group the reminder targets
+        const is_creator = reminder.created_by.toString() === user_id.toString();
+        let is_moderator = false;
+
+        if (!is_creator && reminder.group_ids && reminder.group_ids.length > 0) {
+            // Check if user is a moderator of any of the target groups
+            const groups = await Group.find({
+                _id: { $in: reminder.group_ids },
+                moderator_ids: user_id
+            });
+            is_moderator = groups.length > 0;
+        }
+
+        if (!is_creator && !is_moderator) {
+            return res.status(403).json({ success: false, message: 'You can only delete reminders you created or in groups you moderate' });
+        }
+
+        // Delete the reminder
+        await Reminder.findByIdAndDelete(id);
 
         // Remove from scheduler (no-op if already fired/gone)
         scheduler.cancel(id);
