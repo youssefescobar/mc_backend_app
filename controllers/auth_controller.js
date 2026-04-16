@@ -1008,10 +1008,6 @@ exports.reissue_pilgrim_login = async (req, res) => {
             return sendError(res, 404, 'Pilgrim not found');
         }
 
-        if (pilgrim.one_time_login?.used_at) {
-            return sendError(res, 400, 'Pilgrim has already activated this account');
-        }
-
         const login = await issueOneTimePilgrimLogin({ pilgrim, moderatorId: toObjectId(req.user.id) });
 
         sendSuccess(res, 200, 'One-time login token reissued', {
