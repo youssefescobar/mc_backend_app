@@ -100,7 +100,7 @@ exports.cancel_reminder = async (req, res) => {
         }
 
         const reminder = await Reminder.findOneAndUpdate(
-            { _id: id, created_by: user_id, status: { $in: ['pending', 'active'] } },
+            { _id: id, status: { $in: ['pending', 'active'] } },
             { status: 'cancelled' },
             { new: true }
         );
