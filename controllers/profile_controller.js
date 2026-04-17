@@ -362,13 +362,26 @@ exports.get_my_group = async (req, res) => {
         const user_id = toObjectId(req.user.id);
         if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
-        // Find group that contains this user (pilgrim)
-        const group = await Group.findOne({ pilgrim_ids: user_id })
-            .populate('created_by', 'full_name email phone_number current_latitude current_longitude')
-            .populate('moderator_ids', 'full_name email phone_number current_latitude current_longitude');
+        const [group, user] = await Promise.all([
+            Group.findOne({ pilgrim_ids: user_id })
+                .populate('created_by', 'full_name email phone_number current_latitude current_longitude')
+                .populate('moderator_ids', 'full_name email phone_number current_latitude current_longitude')
+                .populate('assigned_hotel_ids')
+                .populate('assigned_bus_ids'),
+            User.findById(user_id)
+        ]);
 
         if (!group) {
             return sendError(res, 404, 'You are not assigned to any group');
+        }
+
+        const hotel = group.assigned_hotel_ids?.[0];
+        const bus = group.assigned_bus_ids?.[0];
+
+        let days_remaining = null;
+        if (group.check_out_date) {
+            const diff = Math.ceil((new Date(group.check_out_date) - new Date()) / (1000 * 60 * 60 * 24));
+            days_remaining = diff > 0 ? diff : 0;
         }
 
         sendSuccess(res, 200, null, {
@@ -377,7 +390,16 @@ exports.get_my_group = async (req, res) => {
             created_by: group.created_by,
             moderators: group.moderator_ids,
             pilgrim_count: group.pilgrim_ids?.length || 0,
-            allow_pilgrim_navigation: group.allow_pilgrim_navigation || false
+            allow_pilgrim_navigation: group.allow_pilgrim_navigation || false,
+            // Stay duration parameters appended
+            checkin_date: group.check_in_date?.toISOString().split('T')[0] || null,
+            checkout_date: group.check_out_date?.toISOString().split('T')[0] || null,
+            days_remaining,
+            // Group specific attributes vs user specific
+            hotel_name: user?.hotel_name || hotel?.name || null,
+            room_number: user?.room_number || null,
+            bus_number: bus?.bus_number || user?.bus_info || null,
+            driver_name: bus?.driver_name || null
         });
     } catch (error) {
         sendServerError(res, logger, 'Get my group error', error);

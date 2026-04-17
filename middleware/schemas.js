@@ -199,11 +199,15 @@ exports.update_fcm_token_schema = Joi.object({
  */
 
 exports.create_group_schema = Joi.object({
-    group_name: Joi.string().required().min(3).max(100)
+    group_name: Joi.string().required().min(3).max(100),
+    check_in_date: Joi.date().iso().optional(),
+    check_out_date: Joi.date().iso().optional()
 });
 
 exports.update_group_schema = Joi.object({
-    group_name: Joi.string().optional().min(3).max(100)
+    group_name: Joi.string().optional().min(3).max(100),
+    check_in_date: Joi.date().iso().optional(),
+    check_out_date: Joi.date().iso().optional()
 });
 
 exports.add_pilgrim_schema = Joi.object({

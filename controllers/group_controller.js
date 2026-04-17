@@ -83,6 +83,7 @@ exports.get_single_group = async (req, res) => {
 exports.create_group = async (req, res) => {
     try {
         const group_name = normalizeString(req.body.group_name);
+        const { check_in_date, check_out_date } = req.body;
         const user_id = toObjectId(req.user.id);
         if (!group_name || !user_id) return sendError(res, 400, 'Invalid request payload');
 
@@ -109,6 +110,8 @@ exports.create_group = async (req, res) => {
         const new_group = await Group.create({
             group_name,
             group_code,
+            check_in_date,
+            check_out_date,
             moderator_ids: [user_id], // The creator is the first moderator
             created_by: user_id
         });
@@ -563,7 +566,7 @@ exports.update_group_details = async (req, res) => {
     try {
         const group_id = toObjectId(req.params.group_id);
         const group_name = normalizeString(req.body.group_name);
-        const { allow_pilgrim_navigation } = req.body;
+        const { allow_pilgrim_navigation, check_in_date, check_out_date } = req.body;
         if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         const group = await Group.findById(group_id);
@@ -591,6 +594,8 @@ exports.update_group_details = async (req, res) => {
         }
 
         group.group_name = group_name || group.group_name;
+        if (check_in_date !== undefined) group.check_in_date = check_in_date;
+        if (check_out_date !== undefined) group.check_out_date = check_out_date;
         if (typeof allow_pilgrim_navigation === 'boolean') {
             group.allow_pilgrim_navigation = allow_pilgrim_navigation;
         }
