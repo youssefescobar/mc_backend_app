@@ -2,26 +2,27 @@ const mongoose = require('mongoose');
 require('dotenv').config();
 
 mongoose.connect(process.env.MONGODB_URI || process.env.MONGO_URI).then(async () => {
-    const R = require('./models/reminder_model');
+    const Group = require('./models/group_model');
     const User = require('./models/user_model');
 
-    // Latest reminders
-    const reminders = await R.find({}).sort({ createdAt: -1 }).limit(5).lean();
-    console.log('=== LATEST REMINDERS ===');
-    reminders.forEach(r => {
-        console.log(`text: "${r.text}" | status: ${r.status} | fires_sent: ${r.fires_sent}/${r.repeat_count} | group_ids: ${JSON.stringify(r.group_ids)} | scheduled_at: ${r.scheduled_at}`);
-    });
+    console.log('=== GROUP DETAILS ===');
+    const groups = await Group.find({}).lean();
+    for (const g of groups) {
+        console.log(`\nGroup: "${g.group_name}" (${g._id})`);
+        
+        console.log('  MODERATORS (moderator_ids):');
+        for (const mid of (g.moderator_ids || [])) {
+            const u = await User.findById(mid).select('full_name user_type fcm_token').lean();
+            console.log(`    → ${u?.full_name ?? 'NOT FOUND'} | type: ${u?.user_type} | FCM: ${u?.fcm_token ? 'YES' : 'NO'}`);
+        }
+        const creator = await User.findById(g.created_by).select('full_name user_type fcm_token').lean();
+        console.log(`  CREATOR (created_by): ${creator?.full_name ?? 'NOT FOUND'} | type: ${creator?.user_type} | FCM: ${creator?.fcm_token ? 'YES' : 'NO'}`);
 
-    // All users with FCM tokens
-    console.log('\n=== ALL USERS ===');
-    const users = await User.find({}).select('full_name role fcm_token').lean();
-    if (users.length === 0) {
-        console.log('NO users found!');
-    } else {
-        users.forEach(u => {
-            const tokenStatus = u.fcm_token ? `HAS TOKEN: ${u.fcm_token.substring(0, 35)}...` : 'NO TOKEN';
-            console.log(`name: ${u.full_name} | role: ${u.role} | fcm: ${tokenStatus}`);
-        });
+        console.log('  PILGRIMS (pilgrim_ids):');
+        for (const pid of (g.pilgrim_ids || [])) {
+            const u = await User.findById(pid).select('full_name user_type fcm_token').lean();
+            console.log(`    → ${u?.full_name ?? 'NOT FOUND'} | type: ${u?.user_type} | FCM: ${u?.fcm_token ? 'YES (' + u.fcm_token.substring(0,25) + '...)' : 'NO ← PROBLEM'}`);
+        }
     }
 
     mongoose.disconnect();
