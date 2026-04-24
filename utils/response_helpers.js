@@ -55,6 +55,19 @@ const sendValidationError = (res, errors) => {
  */
 const sendServerError = (res, logger, context, error) => {
     logger.error(`${context}: ${error.message}`, { stack: error.stack });
+    
+    if (error.name === 'ValidationError') {
+        const errors = {};
+        for (let field in error.errors) {
+            errors[field] = error.errors[field].message;
+        }
+        return sendError(res, 400, 'Validation Error', errors);
+    }
+    
+    if (error.code === 11000) {
+        return sendError(res, 409, 'Duplicate record found');
+    }
+    
     sendError(res, 500, 'Server error');
 };
 

@@ -714,18 +714,21 @@ exports.provision_pilgrim = async (req, res) => {
         const national_id = normalizeString(req.body.national_id) || undefined;
         const email = normalizeString(req.body.email).toLowerCase() || undefined;
 
-        const duplicateQuery = {
-            user_type: 'pilgrim',
-            $or: [
-                { phone_number },
-                ...(national_id ? [{ national_id }] : []),
-                ...(email ? [{ email }] : []),
-            ],
-        };
+        const orConditions = [];
+        if (phone_number) orConditions.push({ phone_number });
+        if (national_id) orConditions.push({ national_id });
+        if (email) orConditions.push({ email });
 
-        const existing = await User.findOne(duplicateQuery);
-        if (existing) {
-            return sendError(res, 409, 'Pilgrim already exists with this phone, national ID, or email');
+        if (orConditions.length > 0) {
+            const duplicateQuery = {
+                user_type: 'pilgrim',
+                $or: orConditions,
+            };
+
+            const existing = await User.findOne(duplicateQuery);
+            if (existing) {
+                return sendError(res, 409, 'Pilgrim already exists with this phone, national ID, or email');
+            }
         }
 
         let resourceFields;
@@ -810,14 +813,18 @@ exports.provision_pilgrims_bulk = async (req, res) => {
                 continue;
             }
 
-            const existing = await User.findOne({
-                user_type: 'pilgrim',
-                $or: [
-                    { phone_number },
-                    ...(national_id ? [{ national_id }] : []),
-                    ...(email ? [{ email }] : []),
-                ],
-            }).select('_id full_name');
+            const orConditions = [];
+            if (phone_number) orConditions.push({ phone_number });
+            if (national_id) orConditions.push({ national_id });
+            if (email) orConditions.push({ email });
+
+            let existing = null;
+            if (orConditions.length > 0) {
+                existing = await User.findOne({
+                    user_type: 'pilgrim',
+                    $or: orConditions,
+                }).select('_id full_name');
+            }
 
             if (existing) {
                 skipped.push({

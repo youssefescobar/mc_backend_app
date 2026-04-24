@@ -667,20 +667,30 @@ exports.leave_group = async (req, res) => {
         const group = await Group.findById(group_id);
         if (!group) return sendError(res, 404, 'Group not found');
 
-        // Creator cannot leave
-        if (group.created_by.toString() === user_id.toString()) {
-            return sendError(res, 400, 'Group creator cannot leave the group. You must delete the group');
-        }
-
         // Check if user is a moderator
         if (!group.moderator_ids.some(id => id.toString() === user_id.toString())) {
             return sendError(res, 400, 'You are not a moderator of this group');
         }
 
+        if (group.moderator_ids.length === 1) {
+            return sendError(res, 400, 'You are the only moderator left. You must delete the group permanently.');
+        }
+
+        // Handle group creator leaving
+        if (group.created_by.toString() === user_id.toString()) {
+            const new_creator_id = req.body.new_creator_id;
+            if (!new_creator_id) {
+                return sendError(res, 400, 'Group creator must reassign the group to another moderator before leaving');
+            }
+            if (!group.moderator_ids.some(id => id.toString() === new_creator_id.toString())) {
+                return sendError(res, 400, 'New creator must be an existing moderator of the group');
+            }
+            group.created_by = new_creator_id;
+        }
+
         // Remove from moderators list
-        await Group.findByIdAndUpdate(group_id, {
-            $pull: { moderator_ids: user_id }
-        });
+        group.moderator_ids.pull(user_id);
+        await group.save();
 
         // Get the leaving user's details for the notification
         const leavingUser = await User.findById(user_id);
