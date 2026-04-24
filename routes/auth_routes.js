@@ -20,7 +20,8 @@ const {
     provision_pilgrim_schema,
     provision_pilgrims_bulk_schema,
     pilgrim_token_login_schema,
-    group_id_param_schema
+    group_id_param_schema,
+    update_pilgrim_details_schema
 } = require('../middleware/schemas');
 const { authLimiter, loginLimiter, registerLimiter, searchLimiter } = require('../middleware/rate_limit');
 const upload = require('../middleware/upload_middleware');
@@ -71,5 +72,6 @@ router.post('/groups/:group_id/pilgrims/:pilgrim_id/reissue-login', modAuth, val
 router.delete('/groups/:group_id/pilgrims/:pilgrim_id', modAuth, validate(group_id_param_schema, 'params'), validate(pilgrim_id_param_schema, 'params'), auth_ctrl.delete_provisioned_pilgrim);
 router.get('/search-pilgrims', modAuth, searchLimiter, auth_ctrl.search_pilgrims);
 router.get('/pilgrims/:pilgrim_id', modAuth, validate(pilgrim_id_param_schema, 'params'), auth_ctrl.get_pilgrim_by_id);
+router.put('/pilgrims/:pilgrim_id', modAuth, validate(pilgrim_id_param_schema, 'params'), validate(update_pilgrim_details_schema), auth_ctrl.update_pilgrim_details);
 
 module.exports = router;

@@ -150,6 +150,25 @@ exports.register_invited_pilgrim_schema = Joi.object({
     })
 });
 
+exports.update_pilgrim_details_schema = Joi.object({
+    full_name: Joi.string().optional().min(3).max(100),
+    phone_number: Joi.string().optional().allow(''),
+    age: Joi.number().optional().min(0).max(120),
+    gender: Joi.string().optional().valid(...GENDERS),
+    medical_history: Joi.string().optional().allow('').max(500),
+    language: Joi.string().optional().valid(...SUPPORTED_LANGUAGES),
+    room_number: Joi.string().optional().allow('').max(50),
+    bus_info: Joi.string().optional().allow('').max(120),
+    hotel_name: Joi.string().optional().allow('').max(120),
+    ethnicity: Joi.string().optional().valid(...ETHNICITIES),
+    visa: Joi.object({
+        visa_number: Joi.string().optional().allow('').max(64),
+        issue_date: Joi.date().optional(),
+        expiry_date: Joi.date().optional(),
+        status: Joi.string().optional().valid(...VISA_STATUSES)
+    }).optional()
+});
+
 /**
  * Profile Management Validations
  */

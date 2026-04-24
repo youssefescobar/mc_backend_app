@@ -1093,6 +1093,63 @@ exports.delete_provisioned_pilgrim = async (req, res) => {
 };
 
 /**
+ * Update pilgrim details (by moderator/admin)
+ */
+exports.update_pilgrim_details = async (req, res) => {
+    try {
+        const pilgrim_id = toObjectId(req.params.pilgrim_id);
+        if (!pilgrim_id) return sendError(res, 400, 'Invalid pilgrim ID');
+
+        // Check if moderator created this pilgrim (or is an admin)
+        const pilgrim = await User.findById(pilgrim_id);
+        if (!pilgrim) return sendError(res, 404, 'Pilgrim not found');
+
+        const requester_id = toObjectId(req.user.id);
+
+        if (req.user.role !== 'admin' && pilgrim.created_by?.toString() !== req.user.id) {
+            // Check if moderator is in the same group as pilgrim
+            const commonGroup = await Group.findOne({
+                pilgrim_ids: pilgrim_id,
+                moderator_ids: requester_id
+            });
+            if (!commonGroup) {
+                return sendError(res, 403, 'You do not have permission to update this pilgrim');
+            }
+        }
+
+        const {
+            full_name, phone_number, age, gender, medical_history,
+            language, room_number, bus_info, hotel_name, ethnicity, visa
+        } = req.body;
+
+        const updateData = {
+            ...(full_name && { full_name }),
+            ...(phone_number !== undefined && { phone_number }),
+            ...(age !== undefined && { age: parseInt(age) }),
+            ...(gender && { gender }),
+            ...(medical_history !== undefined && { medical_history }),
+            ...(language && { language }),
+            ...(room_number !== undefined && { room_number }),
+            ...(bus_info !== undefined && { bus_info }),
+            ...(hotel_name !== undefined && { hotel_name }),
+            ...(ethnicity && { ethnicity }),
+            ...(visa && { visa })
+        };
+
+        const updatedPilgrim = await User.findByIdAndUpdate(
+            pilgrim_id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).select('-password');
+
+        logger.info(`Moderator ${req.user.id} updated pilgrim ${pilgrim_id}`);
+        sendSuccess(res, 200, 'Pilgrim details updated successfully', { pilgrim: updatedPilgrim });
+    } catch (error) {
+        sendServerError(res, logger, 'Update pilgrim details error', error);
+    }
+};
+
+/**
  * Pilgrim one-time QR token login with device binding.
  */
 exports.pilgrim_one_time_login = async (req, res) => {
