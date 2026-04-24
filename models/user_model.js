@@ -161,6 +161,15 @@ const user_schema = new mongoose.Schema({
         maxlength: 128,
         default: null
     },
+    limbo_reason: {
+        type: String,
+        enum: ['manual', 'group_deleted', null],
+        default: null
+    },
+    limbo_group_name: {
+        type: String,
+        default: null
+    },
     
     // ========================================
     // Profile & Media

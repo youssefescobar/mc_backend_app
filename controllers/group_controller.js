@@ -322,7 +322,7 @@ exports.get_my_pilgrims = async (req, res) => {
             : { user_type: 'pilgrim', created_by: { $in: Array.from(all_moderator_ids) } };
 
         const pilgrims = await User.find(filter)
-            .select('full_name phone_number national_id age language ethnicity is_online created_at')
+            .select('full_name phone_number national_id age language ethnicity is_online created_at limbo_reason limbo_group_name')
             .lean();
 
         if (pilgrims.length === 0) {
@@ -473,6 +473,14 @@ exports.add_pilgrim_to_group = async (req, res) => {
             { new: true }
         ).populate('pilgrim_ids', 'full_name email phone_number national_id age gender current_latitude current_longitude battery_percent last_location_update is_online');
 
+        // Clear limbo status as they are now assigned
+        await User.findByIdAndUpdate(existing_pilgrim._id, {
+            $set: { 
+                limbo_reason: null,
+                limbo_group_name: null
+            }
+        });
+
         // Notify the pilgrim that they were added to a group
         const io = req.app.get('socketio');
         if (io) {
@@ -511,6 +519,14 @@ exports.remove_pilgrim_from_group = async (req, res) => {
         );
 
         if (!updated_group) return sendError(res, 404, 'Group not found');
+
+        // Mark the pilgrim as manually unassigned
+        await User.findByIdAndUpdate(user_id, {
+            $set: { 
+                limbo_reason: 'manual',
+                limbo_group_name: updated_group.group_name
+            }
+        });
 
         // Notify the removed pilgrim via socket
         const io = req.app.get('socketio');
@@ -559,7 +575,32 @@ exports.delete_group = async (req, res) => {
             return sendError(res, 403, 'Only group moderators can delete the group');
         }
 
-        // Delete the group (pilgrims are automatically unassigned)
+        // Mark all pilgrims in the group as unassigned due to group deletion
+        if (group.pilgrim_ids && group.pilgrim_ids.length > 0) {
+            await User.updateMany(
+                { _id: { $in: group.pilgrim_ids } },
+                { 
+                    $set: { 
+                        limbo_reason: 'group_deleted',
+                        limbo_group_name: group.group_name
+                    }
+                }
+            );
+            
+            // Notify them via socket
+            const io = req.app.get('socketio');
+            if (io) {
+                group.pilgrim_ids.forEach(pid => {
+                    io.to(`user_${pid}`).emit('removed-from-group', {
+                        group_id: group_id,
+                        group_name: group.group_name,
+                        reason: 'group_deleted'
+                    });
+                });
+            }
+        }
+
+        // Delete the group
         await Group.findByIdAndDelete(group_id);
 
         sendSuccess(res, 200, 'Group deleted successfully', { group_id });
