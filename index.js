@@ -32,8 +32,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] },
-    pingTimeout: 10000, // Wait 10s before considering dead (default 20000)
-    pingInterval: 5000  // Send ping every 5s (default 25000)
+    pingTimeout: 60000,  // Wait 60s before considering dead (mobile apps go quiet in background)
+    pingInterval: 25000  // Send ping every 25s (standard Socket.IO default, prevents flooding)
 });
 
 // Initialize Sockets

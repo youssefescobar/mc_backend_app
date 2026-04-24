@@ -86,6 +86,38 @@ const send_invitation = async (req, res) => {
                     inviter_name: inviter.full_name
                 }
             });
+
+            // Send FCM push notification to the invitee's device
+            const invitee_user = invitee || invitee_pilgrim;
+            if (invitee_user?.fcm_token) {
+                try {
+                    await sendPushNotification(
+                        [invitee_user.fcm_token],
+                        'Group Invitation 📩',
+                        `${inviter.full_name} invited you to join "${group.group_name}"`,
+                        {
+                            type: 'group_invitation',
+                            invitation_id: invitation._id.toString(),
+                            group_id: group._id.toString(),
+                            group_name: group.group_name,
+                            inviter_name: inviter.full_name,
+                            notification_type: 'group_invitation'
+                        }
+                    );
+                    logger.info(`FCM invitation push sent to ${invitee_user.full_name}`);
+                } catch (push_err) {
+                    logger.warn(`FCM push to invitee failed (non-fatal): ${push_err.message}`);
+                }
+            }
+
+            // Emit a real-time socket event so the invitee's app refreshes notifications immediately
+            const io = req.app.get('socketio');
+            if (io) {
+                io.to(`user_${notify_id}`).emit('notification_refresh', {
+                    type: 'group_invitation'
+                });
+                logger.info(`Socket notification_refresh emitted to user_${notify_id}`);
+            }
         }
 
         // Send invitation email
