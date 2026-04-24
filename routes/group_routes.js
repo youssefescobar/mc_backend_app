@@ -26,6 +26,7 @@ const moderatorAuth = authorize('moderator', 'admin');
 // Only moderators can manage groups
 router.post('/create', moderatorAuth, validate(create_group_schema), group_controller.create_group);
 router.get('/dashboard', moderatorAuth, group_controller.get_my_groups);
+router.get('/my-pilgrims', moderatorAuth, group_controller.get_my_pilgrims);
 // Band assignment routes removed
 router.post('/send-alert', moderatorAuth, validate(send_alert_schema), group_controller.send_group_alert);
 router.post('/send-individual-alert', moderatorAuth, validate(send_individual_alert_schema), group_controller.send_individual_alert);

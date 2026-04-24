@@ -303,6 +303,61 @@ exports.get_my_groups = async (req, res) => {
     }
 };
 
+// 3.5 Get all pilgrims created by this moderator or co-moderators, with current group info
+exports.get_my_pilgrims = async (req, res) => {
+    try {
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) return sendError(res, 400, 'Invalid user identifier');
+
+        // Collect all moderator IDs across all groups this moderator belongs to
+        const my_groups = await Group.find({ moderator_ids: user_id }).lean();
+        const all_moderator_ids = new Set([user_id.toString()]);
+        my_groups.forEach(g => {
+            g.moderator_ids.forEach(mid => all_moderator_ids.add(mid.toString()));
+        });
+
+        // Query filter: all pilgrims created by any of these moderators
+        const filter = req.user.role === 'admin'
+            ? { user_type: 'pilgrim' }
+            : { user_type: 'pilgrim', created_by: { $in: Array.from(all_moderator_ids) } };
+
+        const pilgrims = await User.find(filter)
+            .select('full_name phone_number national_id age language ethnicity is_online created_at')
+            .lean();
+
+        if (pilgrims.length === 0) {
+            return sendSuccess(res, 200, null, { data: [] });
+        }
+
+        // For each pilgrim, find their current group assignment (if any)
+        const pilgrim_ids = pilgrims.map(p => p._id);
+        const groups_with_these_pilgrims = await Group.find({ pilgrim_ids: { $in: pilgrim_ids } })
+            .select('_id group_name pilgrim_ids')
+            .lean();
+
+        // Build a map: pilgrim_id -> { group_id, group_name }
+        const pilgrim_group_map = {};
+        groups_with_these_pilgrims.forEach(g => {
+            g.pilgrim_ids.forEach(pid => {
+                pilgrim_group_map[pid.toString()] = {
+                    group_id: g._id.toString(),
+                    group_name: g.group_name
+                };
+            });
+        });
+
+        // Enrich pilgrims with group info
+        const enriched = pilgrims.map(p => ({
+            ...p,
+            current_group: pilgrim_group_map[p._id.toString()] || null
+        }));
+
+        sendSuccess(res, 200, null, { data: enriched });
+    } catch (error) {
+        sendServerError(res, logger, 'Get my pilgrims error', error);
+    }
+};
+
 // 4. Send Message to Group (for later Voice processing)
 exports.send_group_alert = async (req, res) => {
     try {
@@ -354,7 +409,7 @@ exports.send_individual_alert = async (req, res) => {
     }
 };
 
-// 5. Add pilgrim to group (Create if not exists)
+// 5. Add/Transfer existing pilgrim to group
 exports.add_pilgrim_to_group = async (req, res) => {
     try {
         const group_id = toObjectId(req.params.group_id);
@@ -362,44 +417,82 @@ exports.add_pilgrim_to_group = async (req, res) => {
         if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         if (!identifier) {
-            return sendError(res, 400, 'Email, phone number, or national ID is required');
+            return sendError(res, 400, 'Email, phone number, national ID, or name is required');
         }
 
+        const group = await Group.findById(group_id);
+        if (!group) return sendError(res, 404, 'Group not found');
+
+        // Check authorization (only group moderators can add)
+        const is_group_moderator = group.moderator_ids.some(mod => mod.toString() === req.user.id);
+        if (!is_group_moderator && req.user.role !== 'admin') {
+            return sendError(res, 403, 'Not authorized to add pilgrims to this group');
+        }
+
+        const searchTerm = identifier.trim();
+
+        // Find pilgrim: must be created by one of the group's moderators (or if admin, bypass constraint)
+        const privacyConstraint = req.user.role === 'admin' ? {} : { created_by: { $in: group.moderator_ids } };
+        
         const existing_pilgrim = await User.findOne({
             user_type: 'pilgrim',
+            ...privacyConstraint,
             $or: [
-                { email: identifier.trim().toLowerCase() },
-                { phone_number: identifier },
-                { national_id: identifier }
+                { email: searchTerm.toLowerCase() },
+                { phone_number: searchTerm },
+                { national_id: searchTerm },
+                { full_name: { $regex: searchTerm, $options: 'i' } }
             ]
         });
 
         if (!existing_pilgrim) {
-            return sendError(res, 404, 'No registered pilgrim found with that email, phone number, or national ID');
+            return sendError(res, 404, 'No registered pilgrim found matching this criteria within your allowed scope');
         }
 
+        // Check if pilgrim is already in ANOTHER group
+        const old_group = await Group.findOne({ pilgrim_ids: existing_pilgrim._id });
+        if (old_group && old_group._id.toString() !== group_id.toString()) {
+            // Remove from old group silently
+            await Group.findByIdAndUpdate(old_group._id, { $pull: { pilgrim_ids: existing_pilgrim._id } });
+            
+            // Optionally, we could emit a status_update to the old group so their UI updates
+            const io = req.app.get('socketio');
+            if (io) {
+                io.to(`group_${old_group._id}`).emit('status_update', {
+                    user_id: existing_pilgrim._id,
+                    group_id: old_group._id,
+                    status: 'removed'
+                });
+            }
+        }
+
+        // Add to new group
         const updated_group = await Group.findByIdAndUpdate(
             group_id,
             { $addToSet: { pilgrim_ids: existing_pilgrim._id } },
             { new: true }
-        ).populate('pilgrim_ids', 'full_name email phone_number national_id age gender location battery_percent last_location_update');
+        ).populate('pilgrim_ids', 'full_name email phone_number national_id age gender current_latitude current_longitude battery_percent last_location_update is_online');
 
-        if (!updated_group) {
-            return sendError(res, 404, 'Group not found');
+        // Notify the pilgrim that they were added to a group
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${existing_pilgrim._id}`).emit('added-to-group', {
+                group_id: group_id,
+                group_name: updated_group.group_name,
+                timestamp: new Date()
+            });
+            console.log(`[Socket] Pilgrim ${existing_pilgrim._id} added to group ${group_id}`);
         }
 
-        sendSuccess(res, 200, 'Pilgrim added to group', {
+        sendSuccess(res, 200, 'Pilgrim successfully added/transferred to group', {
             group: {
                 _id: updated_group._id,
                 group_name: updated_group.group_name,
-                pilgrims: updated_group.pilgrim_ids
+                pilgrims: updated_group.pilgrim_ids // Already populated
             }
         });
     } catch (error) {
         logger.error(`[Add Pilgrim Error]: ${error.message}`);
-        if (error.code === 11000) {
-            return sendError(res, 400, 'Pilgrim with this National ID or Phone Number already exists');
-        }
         sendServerError(res, logger, 'Add pilgrim to group error', error);
     }
 };
@@ -420,13 +513,22 @@ exports.remove_pilgrim_from_group = async (req, res) => {
         if (!updated_group) return sendError(res, 404, 'Group not found');
 
         // Notify the removed pilgrim via socket
-        const io = req.app.get('io');
+        const io = req.app.get('socketio');
         if (io) {
+            // Notify the user specifically
             io.to(`user_${user_id}`).emit('removed-from-group', {
                 group_id: group_id,
                 group_name: updated_group.group_name,
                 timestamp: new Date()
             });
+
+            // Notify the group room so other moderators' UI update
+            io.to(`group_${group_id}`).emit('status_update', {
+                user_id: user_id,
+                group_id: group_id,
+                status: 'removed'
+            });
+
             console.log(`[Socket] Pilgrim ${user_id} removed from group ${group_id}`);
         }
 
