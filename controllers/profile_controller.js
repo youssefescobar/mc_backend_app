@@ -24,7 +24,7 @@ exports.get_profile = async (req, res) => {
         const user_id = toObjectId(req.user.id);
         if (!user_id) return sendError(res, 400, 'Invalid user identifier');
 
-        const user = await User.findById(user_id).select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language');
+        const user = await User.findById(user_id).select('_id full_name email national_id phone_number medical_history age gender email_verified user_type created_at language hotel_name room_number bus_info visa ethnicity');
         
         if (!user) {
             return sendError(res, 404, 'Profile not found');
