@@ -1008,7 +1008,24 @@ exports.reissue_pilgrim_login = async (req, res) => {
             return sendError(res, 404, 'Pilgrim not found');
         }
 
+        // Clear device binding and set offline to allow login from a new device
+        pilgrim.bound_device_id = null;
+        pilgrim.fcm_token = null;
+        pilgrim.is_online = false;
+        pilgrim.last_active_at = new Date();
+
         const login = await issueOneTimePilgrimLogin({ pilgrim, moderatorId: toObjectId(req.user.id) });
+
+        // Emit socket events to force logout on the current device and update group status
+        const io = req.app.get('io') || req.app.get('socketio');
+        if (io) {
+            io.to(`user_${pilgrim._id}`).emit('force_logout');
+            io.to(`group_${group._id}`).emit('status_update', {
+                pilgrimId: pilgrim._id,
+                active: false,
+                last_active_at: new Date()
+            });
+        }
 
         sendSuccess(res, 200, 'One-time login token reissued', {
             pilgrim: {
