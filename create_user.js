@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const readline = require('readline');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const User = require('./models/user_model');
@@ -64,13 +65,15 @@ function printHelp() {
     console.log('  --national-id <id>                National ID (optional)');
     console.log('  --verified <true|false>           Email verified flag (default: false)');
     console.log('  --active <true|false>             Active flag (default: true)');
+    console.log('');
+    console.log('Quick Test Account Flags:');
+    console.log('  --quick-pilgrim                   Create a random pilgrim instantly');
+    console.log('  --quick-mod                       Create a random moderator instantly');
     console.log('  --help                            Show this message');
     console.log('');
     console.log('Examples:');
-    console.log('  node create_user.js --type pilgrim --name "Ali Ahmed" --email ali@example.com --password 123456 --phone +966500000001 --national-id 1234567890');
+    console.log('  node create_user.js --quick-pilgrim');
     console.log('  node create_user.js --type mod --name "Sara Omar" --email sara@example.com --password 123456 --phone +966500000002 --verified true');
-    console.log('');
-    console.log('If required values are missing, the script will ask for them interactively.');
 }
 
 function askQuestion(rl, question, { required = false, defaultValue = null } = {}) {
@@ -97,6 +100,22 @@ function askQuestion(rl, question, { required = false, defaultValue = null } = {
 }
 
 async function collectMissingValues(parsedArgs) {
+    // ── Quick Creation Logic ────────────────────────────────────────────────
+    if (parsedArgs['quick-pilgrim'] || parsedArgs['quick-mod']) {
+        const isPilgrim = parsedArgs['quick-pilgrim'];
+        const suffix = crypto.randomBytes(2).toString('hex');
+        return {
+            userType: isPilgrim ? 'pilgrim' : 'moderator',
+            fullName: isPilgrim ? `Test Pilgrim ${suffix}` : `Test Mod ${suffix}`,
+            email: `test_${isPilgrim ? 'pilgrim' : 'mod'}_${suffix}@example.com`,
+            password: 'password123',
+            phone: `+9665${Math.floor(10000000 + Math.random() * 90000000)}`,
+            nationalId: isPilgrim ? `NID${suffix}${Math.floor(1000 + Math.random() * 9000)}` : undefined,
+            emailVerified: true,
+            active: true
+        };
+    }
+
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
@@ -198,16 +217,18 @@ async function createUser() {
 
         await user.save();
 
-        console.log('User created successfully');
-        console.log('----------------------------------------');
+        console.log('\n✅ User created successfully');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log(`ID:          ${user._id}`);
         console.log(`Name:        ${user.full_name}`);
         console.log(`Email:       ${user.email}`);
+        console.log(`Password:    ${input.password} (plain)`);
         console.log(`Phone:       ${user.phone_number}`);
         console.log(`Type:        ${user.user_type}`);
         console.log(`Active:      ${user.active}`);
         console.log(`Verified:    ${user.email_verified}`);
-        console.log('----------------------------------------');
+        if (user.national_id) console.log(`National ID: ${user.national_id}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     } catch (error) {
         console.error('Error creating user:', error.message);
         process.exitCode = 1;

@@ -10,8 +10,10 @@
 
 require('dotenv').config();
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const { logger } = require('./config/logger');
 const connectDB = require('./config/db');
+const User = require('./models/user_model');
 
 async function wipeDatabase() {
     try {
@@ -22,8 +24,7 @@ async function wipeDatabase() {
         const collectionNames = collections.map(c => c.name);
 
         logger.info(`Found ${collectionNames.length} collections to drop:`);
-        collectionNames.forEach(name => logger.info(`  - ${name}`));
-
+        
         // Drop each collection
         let droppedCount = 0;
         for (const collectionName of collectionNames) {
@@ -32,7 +33,6 @@ async function wipeDatabase() {
                 logger.info(`✅ Dropped: ${collectionName}`);
                 droppedCount++;
             } catch (error) {
-                // Collection might not exist or already dropped
                 if (error.code === 26) {
                     logger.warn(`  ⚠️  Collection ${collectionName} doesn't exist`);
                 } else {
@@ -41,14 +41,48 @@ async function wipeDatabase() {
             }
         }
 
-        logger.info(`\n🎉 Database wipe complete!`);
-        logger.info(`   Dropped: ${droppedCount}/${collectionNames.length} collections`);
-        logger.info(`\n✨ Database is now clean and ready for fresh data`);
+        logger.info(`\n🎉 Database wipe complete! Dropped: ${droppedCount}/${collectionNames.length} collections`);
+        
+        // ── Seed Default Accounts ───────────────────────────────────────────
+        logger.info('🌱 Seeding default accounts...');
+        
+        const salt = await bcrypt.genSalt(10);
+        const adminPass = await bcrypt.hash('admin123', salt);
+        const modPass = await bcrypt.hash('mod123', salt);
+
+        // 1. Create Admin
+        const admin = new User({
+            full_name: 'System Administrator',
+            email: 'admin@munawwaracare.com',
+            password: adminPass,
+            phone_number: '+966500000000',
+            user_type: 'admin',
+            active: true,
+            email_verified: true
+        });
+
+        // 2. Create Moderator
+        const moderator = new User({
+            full_name: 'Lead Moderator',
+            email: 'mod@munawwaracare.com',
+            password: modPass,
+            phone_number: '+966500000001',
+            user_type: 'moderator',
+            active: true,
+            email_verified: true
+        });
+
+        await Promise.all([admin.save(), moderator.save()]);
+
+        logger.info('✅ Default accounts created:');
+        logger.info('   - Admin: admin@munawwaracare.com / admin123');
+        logger.info('   - Moderator: mod@munawwaracare.com / mod123');
+        logger.info('\n✨ Database is now ready for testing');
 
         return { success: true, dropped: droppedCount, total: collectionNames.length };
 
     } catch (error) {
-        logger.error(`❌ Database wipe failed: ${error.message}`);
+        logger.error(`❌ Database wipe/seed failed: ${error.message}`);
         throw error;
     }
 }
