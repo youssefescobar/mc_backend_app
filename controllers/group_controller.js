@@ -322,7 +322,7 @@ exports.get_my_pilgrims = async (req, res) => {
             : { user_type: 'pilgrim', created_by: { $in: Array.from(all_moderator_ids) } };
 
         const pilgrims = await User.find(filter)
-            .select('full_name phone_number national_id age language ethnicity is_online created_at limbo_reason limbo_group_name')
+            .select('full_name phone_number national_id age language ethnicity is_online created_at limbo_reason limbo_group_name medical_history room_number bus_info hotel_name visa')
             .lean();
 
         if (pilgrims.length === 0) {
