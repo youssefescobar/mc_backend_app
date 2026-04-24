@@ -108,25 +108,25 @@ exports.register_pilgrim_schema = Joi.object({
 exports.provision_pilgrim_schema = Joi.object({
     full_name: Joi.string().required().min(3).max(100),
     phone_number: Joi.string().required().min(3).max(30),
-    national_id: Joi.string().optional().allow(''),
-    email: Joi.string().optional().allow('').email(),
-    age: Joi.number().optional().min(0).max(120),
-    gender: Joi.string().optional().valid(...GENDERS),
-    language: Joi.string().optional().valid(...SUPPORTED_LANGUAGES).default('en'),
-    medical_history: Joi.string().optional().allow('').max(500),
-    room_number: Joi.string().optional().allow('').max(50),
-    room_id: Joi.string().optional().allow(''),
-    bus_info: Joi.string().optional().allow('').max(120),
-    bus_id: Joi.string().optional().allow(''),
-    hotel_name: Joi.string().optional().allow('').max(120),
-    hotel_id: Joi.string().optional().allow(''),
-    ethnicity: Joi.string().optional().valid(...ETHNICITIES),
+    national_id: Joi.string().optional().allow('', null),
+    email: Joi.string().optional().allow('', null).email(),
+    age: Joi.number().required().min(0).max(120),
+    gender: Joi.string().optional().allow(null).valid(...GENDERS),
+    language: Joi.string().required().valid(...SUPPORTED_LANGUAGES).default('en'),
+    medical_history: Joi.string().optional().allow('', null).max(500),
+    room_number: Joi.string().optional().allow('', null).max(50),
+    room_id: Joi.string().optional().allow('', null),
+    bus_info: Joi.string().optional().allow('', null).max(120),
+    bus_id: Joi.string().optional().allow('', null),
+    hotel_name: Joi.string().optional().allow('', null).max(120),
+    hotel_id: Joi.string().optional().allow('', null),
+    ethnicity: Joi.string().required().valid(...ETHNICITIES),
     visa: Joi.object({
-        visa_number: Joi.string().optional().allow('').max(64),
-        issue_date: Joi.date().optional(),
-        expiry_date: Joi.date().optional(),
-        status: Joi.string().optional().valid(...VISA_STATUSES)
-    }).optional()
+        visa_number: Joi.string().optional().allow('', null).max(64),
+        issue_date: Joi.date().optional().allow(null),
+        expiry_date: Joi.date().optional().allow(null),
+        status: Joi.string().required().valid(...VISA_STATUSES)
+    }).required()
 });
 
 exports.provision_pilgrims_bulk_schema = Joi.object({
