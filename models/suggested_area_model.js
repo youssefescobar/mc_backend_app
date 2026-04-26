@@ -37,7 +37,19 @@ const suggested_area_schema = new mongoose.Schema({
     active: {
         type: Boolean,
         default: true
-    }
+    },
+    meetpoint_time: {
+        type: Date,
+        default: null
+    },
+    reminder_minutes: {
+        type: Number,
+        default: 0
+    },
+    reminder_ids: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Reminder'
+    }]
 }, { timestamps: true });
 
 suggested_area_schema.index({ group_id: 1, active: 1 });

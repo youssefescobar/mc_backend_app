@@ -54,7 +54,9 @@ const message_schema = new mongoose.Schema({
         area_id: { type: mongoose.Schema.Types.ObjectId, ref: 'SuggestedArea' },
         name: String,
         latitude: Number,
-        longitude: Number
+        longitude: Number,
+        meetpoint_time: Date,
+        reminder_minutes: Number
     },
     read_by: [{
         type: mongoose.Schema.Types.ObjectId,

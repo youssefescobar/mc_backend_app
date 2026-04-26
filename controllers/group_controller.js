@@ -15,6 +15,79 @@ const toObjectId = (value) => {
     return new mongoose.Types.ObjectId(String(value));
 };
 
+/**
+ * scheduleMeetpointNotifications
+ * Schedules both the "X min before" reminder and the "At time" arrival alert.
+ */
+async function scheduleMeetpointNotifications(area, group, userId) {
+    const Reminder = require('../models/reminder_model');
+    const scheduler = require('../services/reminderScheduler');
+
+    // 1. Cancel and delete any existing reminders for this area
+    if (area.reminder_ids && area.reminder_ids.length > 0) {
+        for (const rId of area.reminder_ids) {
+            scheduler.cancel(rId);
+        }
+        await Reminder.deleteMany({ _id: { $in: area.reminder_ids } });
+        area.reminder_ids = [];
+    }
+    // Also defensive check for any reminders that might not be in the array but link to this area
+    const strayReminders = await Reminder.find({ related_area_id: area._id }).select('_id');
+    if (strayReminders.length > 0) {
+        const strayIds = strayReminders.map(r => r._id);
+        for (const rId of strayIds) scheduler.cancel(rId);
+        await Reminder.deleteMany({ _id: { $in: strayIds } });
+    }
+
+    if (area.area_type !== 'meetpoint' || !area.meetpoint_time) return [];
+
+    const newReminderIds = [];
+    const now = new Date();
+    const meetTime = new Date(area.meetpoint_time);
+
+    // 2. Arrival Notification (Exactly at scheduled time) - Urgent
+    if (meetTime > now) {
+        const arrival = await Reminder.create({
+            created_by: userId,
+            group_ids: [group._id],
+            target_type: 'group',
+            title: 'Time to Meet! 📍',
+            text: `Head to ${area.name} now — your meetpoint has started.`,
+            scheduled_at: meetTime,
+            is_urgent: true,
+            related_area_id: area._id,
+            status: 'pending'
+        });
+        scheduler.add(arrival);
+        newReminderIds.push(arrival._id);
+    }
+
+    // 3. Reminder Notification (X minutes before) - Standard
+    if (area.reminder_minutes > 0) {
+        const reminderTime = new Date(meetTime.getTime() - (area.reminder_minutes * 60000));
+        if (reminderTime > now) {
+            const reminder = await Reminder.create({
+                created_by: userId,
+                group_ids: [group._id],
+                target_type: 'group',
+                title: 'Meetpoint Reminder',
+                text: `You have a meetpoint at ${area.name} in ${area.reminder_minutes} minutes.`,
+                scheduled_at: reminderTime,
+                is_urgent: false,
+                related_area_id: area._id,
+                status: 'pending'
+            });
+            scheduler.add(reminder);
+            newReminderIds.push(reminder._id);
+        }
+    }
+
+    // Update the area with new IDs
+    area.reminder_ids = newReminderIds;
+    await area.save();
+    return newReminderIds;
+}
+
 const normalizeString = (value) => String(value || '').trim();
 
 // Get a single group by ID (moderator/admin only)
@@ -777,7 +850,7 @@ exports.update_group_details = async (req, res) => {
 exports.add_suggested_area = async (req, res) => {
     try {
         const group_id = toObjectId(req.params.group_id);
-        const { name, description, latitude, longitude, area_type } = req.body;
+        const { name, description, latitude, longitude, area_type, meetpoint_time, reminder_minutes } = req.body;
         if (!group_id) return sendError(res, 400, 'Invalid group identifier');
         const type = area_type || 'suggestion';
 
@@ -795,9 +868,8 @@ exports.add_suggested_area = async (req, res) => {
             return sendError(res, 403, 'Not authorized');
         }
 
-        // Meetpoint constraint: only one active meetpoint per group
         if (type === 'meetpoint') {
-            const existing = await SuggestedArea.findOne({ group_id, area_type: 'meetpoint', active: true });
+            const existing = await SuggestedArea.findOne({ group_id, area_type: 'meetpoint', active: { $ne: false } });
             if (existing) {
                 return sendError(res, 409, 'A meetpoint already exists. Delete the current one before adding a new one');
             }
@@ -810,7 +882,9 @@ exports.add_suggested_area = async (req, res) => {
             description: (description || '').trim(),
             area_type: type,
             latitude,
-            longitude
+            longitude,
+            meetpoint_time: type === 'meetpoint' ? meetpoint_time : null,
+            reminder_minutes: type === 'meetpoint' ? (reminder_minutes || 0) : 0
         });
 
         await area.populate('created_by', 'full_name');
@@ -893,16 +967,22 @@ exports.add_suggested_area = async (req, res) => {
                         area_id: area._id,
                         name: name.trim(),
                         latitude,
-                        longitude
+                        longitude,
+                        meetpoint_time: area.meetpoint_time,
+                        reminder_minutes: area.reminder_minutes
                     }
                 });
                 await meetpointMsg.populate('sender_id', 'full_name profile_picture role');
                 if (io) {
                     io.to(`group_${group_id}`).emit('new_message', meetpointMsg);
                 }
+
+                // --- Schedule Meetpoint Notifications (Reminder + Arrival) ---
+                await scheduleMeetpointNotifications(area, group, req.user.id);
+                
             } catch (msgErr) {
                 // Log but don't fail the whole request — area + notifications already done
-                logger.error(`Meetpoint chat message creation failed: ${msgErr.message}`);
+                logger.error(`Meetpoint chat message/notifications scheduling failed: ${msgErr.message}`);
             }
         }
 
@@ -923,7 +1003,7 @@ exports.get_suggested_areas = async (req, res) => {
             return sendError(res, 404, 'Group not found');
         }
 
-        const areas = await SuggestedArea.find({ group_id, active: true })
+        const areas = await SuggestedArea.find({ group_id, active: { $ne: false } })
             .populate('created_by', 'full_name')
             .sort({ createdAt: -1 })
             .lean();
@@ -931,7 +1011,7 @@ exports.get_suggested_areas = async (req, res) => {
         logger.info(`Fetching suggested areas for group ${group_id}: ${areas.length} areas found`);
         
         // Return areas wrapped in data object
-        sendSuccess(res, 200, null, { data: areas });
+        sendSuccess(res, 200, null, { areas });
     } catch (error) {
         sendServerError(res, logger, 'Get suggested areas error', error);
     }
@@ -955,7 +1035,7 @@ exports.delete_suggested_area = async (req, res) => {
         }
 
         const area = await SuggestedArea.findOneAndUpdate(
-            { _id: area_id, group_id, active: true },
+            { _id: area_id, group_id, active: { $ne: false } },
             { active: false },
             { new: true }
         );
@@ -974,9 +1054,24 @@ exports.delete_suggested_area = async (req, res) => {
             ]
         });
 
-        // If deleting a meetpoint, also remove the linked meetpoint chat message(s)
+        // If deleting a meetpoint, also remove the linked meetpoint chat message(s) and notifications
         let removedMessageIds = [];
         if (area.area_type === 'meetpoint') {
+            // Cancel and delete reminders
+            const Reminder = require('../models/reminder_model');
+            const scheduler = require('../services/reminderScheduler');
+            if (area.reminder_ids && area.reminder_ids.length > 0) {
+                for (const rId of area.reminder_ids) scheduler.cancel(rId);
+                await Reminder.deleteMany({ _id: { $in: area.reminder_ids } });
+            }
+            // Defensive cleanup
+            const strayReminders = await Reminder.find({ related_area_id: area._id }).select('_id');
+            if (strayReminders.length > 0) {
+                const strayIds = strayReminders.map(r => r._id);
+                for (const rId of strayIds) scheduler.cancel(rId);
+                await Reminder.deleteMany({ _id: { $in: strayIds } });
+            }
+
             const meetpointMessages = await Message.find({
                 group_id,
                 type: 'meetpoint',
@@ -1027,7 +1122,7 @@ exports.update_suggested_area = async (req, res) => {
     try {
         const group_id = toObjectId(req.params.group_id);
         const area_id = toObjectId(req.params.area_id);
-        const { name, description, latitude, longitude } = req.body;
+        const { name, description, latitude, longitude, meetpoint_time, reminder_minutes } = req.body;
 
         if (!group_id || !area_id) return sendError(res, 400, 'Invalid group or area identifier');
 
@@ -1047,13 +1142,15 @@ exports.update_suggested_area = async (req, res) => {
         if (description !== undefined) updateData.description = description.trim();
         if (latitude !== undefined) updateData.latitude = latitude;
         if (longitude !== undefined) updateData.longitude = longitude;
+        if (meetpoint_time !== undefined) updateData.meetpoint_time = meetpoint_time;
+        if (reminder_minutes !== undefined) updateData.reminder_minutes = reminder_minutes;
 
         if (Object.keys(updateData).length === 0) {
             return sendError(res, 400, 'No valid fields to update');
         }
 
         const area = await SuggestedArea.findOneAndUpdate(
-            { _id: area_id, group_id, active: true },
+            { _id: area_id, group_id, active: { $ne: false } },
             updateData,
             { new: true }
         );
@@ -1066,6 +1163,15 @@ exports.update_suggested_area = async (req, res) => {
         const io = req.app.get('socketio');
         if (io) {
             io.to(`group_${group_id}`).emit('area_updated', area);
+        }
+
+        // --- If meetpoint time/reminder changed, re-schedule notifications ---
+        if (area.area_type === 'meetpoint' && (meetpoint_time !== undefined || reminder_minutes !== undefined)) {
+            try {
+                await scheduleMeetpointNotifications(area, group, req.user.id);
+            } catch (err) {
+                logger.error(`Failed to re-schedule meetpoint notifications: ${err.message}`);
+            }
         }
 
         sendSuccess(res, 200, 'Suggested area updated', area);

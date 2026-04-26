@@ -26,6 +26,10 @@ const reminder_schema = new mongoose.Schema({
         required: true,
         maxlength: 500
     },
+    title: {
+        type: String,
+        default: 'Reminder'
+    },
     scheduled_at: {
         type: Date,
         required: true
@@ -63,6 +67,15 @@ const reminder_schema = new mongoose.Schema({
     fires_sent: {
         type: Number,
         default: 0
+    },
+    related_area_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SuggestedArea',
+        default: null
+    },
+    is_urgent: {
+        type: Boolean,
+        default: false
     }
 }, { timestamps: true });
 

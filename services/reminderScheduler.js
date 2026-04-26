@@ -202,7 +202,7 @@ async function _fire(reminderId, key) {
             const translationsByLang = {};
             await Promise.all(uniqueLangs.map(async (lang) => {
                 const [translatedTitle, translatedText] = await Promise.all([
-                    translateText('Reminder', lang),
+                    translateText(reminder.title || 'Reminder', lang),
                     translateText(reminder.text, lang)
                 ]);
                 translationsByLang[lang] = { translatedTitle, translatedText };
@@ -227,7 +227,7 @@ async function _fire(reminderId, key) {
                         body: translatedText,
                         reminderId: reminderId
                     },
-                    true // isUrgent = true → data-only, background handler does sound+TTS
+                    reminder.is_urgent || false // isUrgent = true → data-only, background handler does sound+TTS
                 );
             }));
 
