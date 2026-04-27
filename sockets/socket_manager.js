@@ -516,9 +516,38 @@ const initializeSockets = (io) => {
         });
 
         // ── Pilgrim SOS Cancel ───────────────────────────────────────
-        socket.on('sos_cancel', (data) => {
+        socket.on('sos_cancel', async (data) => {
             const { groupId, pilgrimId } = data;
             if (!groupId) return;
+            
+            try {
+                const Notification = require('../models/notification_model');
+                
+                // Find the most recent SOS notification for this pilgrim
+                const targetPilgrimId = pilgrimId || socket.data.userId;
+                const latestSos = await Notification.findOne({
+                    type: 'sos_alert',
+                    'data.pilgrim_id': targetPilgrimId
+                }).sort({ created_at: -1 });
+
+                if (latestSos) {
+                    // Delete all SOS notifications generated for this specific SOS trigger event
+                    // We use a 5-second window around the latest notification's creation time
+                    // because insertMany might create them with milliseconds difference.
+                    const timeWindowMs = 5000;
+                    const startTime = new Date(latestSos.created_at.getTime() - timeWindowMs);
+                    const endTime = new Date(latestSos.created_at.getTime() + timeWindowMs);
+
+                    await Notification.deleteMany({
+                        type: 'sos_alert',
+                        'data.pilgrim_id': targetPilgrimId,
+                        created_at: { $gte: startTime, $lte: endTime }
+                    });
+                }
+            } catch (err) {
+                console.error('[Socket] Failed to delete SOS notifications:', err);
+            }
+
             socket.to(`group_${groupId}`).emit('sos-alert-cancelled', {
                 pilgrim_id: pilgrimId || socket.data.userId,
                 group_id: groupId,
