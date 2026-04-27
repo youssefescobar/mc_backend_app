@@ -170,6 +170,11 @@ const user_schema = new mongoose.Schema({
         type: String,
         default: null
     },
+    password_reset: {
+        code_hash: { type: String, default: null },
+        expires_at: { type: Date, default: null },
+        attempts: { type: Number, default: 0 }
+    },
     
     // ========================================
     // Profile & Media

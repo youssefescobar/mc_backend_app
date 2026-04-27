@@ -240,10 +240,50 @@ const sendPilgrimInvitationEmail = async (to, inviterName, groupName, deepLink) 
     }
 };
 
+// Send password reset email
+const sendPasswordResetEmail = async (to, code, fullName) => {
+    const content = `
+        <h2 style="margin: 0 0 20px; color: #1f2937; font-size: 22px;">Hello ${fullName},</h2>
+        <p style="margin: 0 0 30px; color: #4b5563; font-size: 16px; line-height: 1.6;">
+            We received a request to reset your password. Use the code below to proceed:
+        </p>
+        <!-- Code Box -->
+        <div style="text-align: center; margin: 30px 0;">
+            <div style="display: inline-block; background-color: #fef2f2; border: 2px dashed #ef4444; border-radius: 8px; padding: 20px 40px;">
+                <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #dc2626;">${code}</span>
+            </div>
+        </div>
+        <p style="margin: 30px 0 0; color: #6b7280; font-size: 14px; text-align: center;">
+            This code will expire in <strong>10 minutes</strong>.
+        </p>
+        <p style="margin: 20px 0 0; color: #9ca3af; font-size: 13px; text-align: center;">
+            If you didn't request a password reset, please ignore this email. Your password will remain unchanged.
+        </p>
+    `;
+
+    const mailOptions = {
+        from: `"Munawwara Care" <${process.env.EMAIL_USER}>`,
+        to,
+        subject: 'Password Reset - Munawwara Care',
+        html: createEmailTemplate(content)
+    };
+
+    try {
+        const result = await sendEmailWithRetry(mailOptions);
+        logger.info(`Password reset email sent to: ${to} (Message ID: ${result.messageId})`);
+        return result;
+    } catch (error) {
+        logger.error(`Failed to send password reset email to ${to}: ${error.message}`);
+        throw error;
+    }
+};
+
 module.exports = {
     generateVerificationCode,
     sendVerificationEmail,
     sendGroupInvitationEmail,
     sendPilgrimInvitationEmail,
+    sendPasswordResetEmail,
     isEmailServiceReady
 };
+

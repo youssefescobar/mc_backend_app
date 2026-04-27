@@ -74,6 +74,30 @@ exports.login_schema = Joi.object({
     })
 });
 
+// Forgot Password — request reset code
+exports.forgot_password_schema = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please provide a valid email address',
+        'any.required': 'Email is required'
+    })
+});
+
+// Reset Password — verify code and set new password
+exports.reset_password_schema = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please provide a valid email address',
+        'any.required': 'Email is required'
+    }),
+    code: Joi.string().required().length(6).messages({
+        'string.length': 'Reset code must be 6 digits',
+        'any.required': 'Reset code is required'
+    }),
+    new_password: Joi.string().required().min(SIMPLE_PASSWORD_MIN).messages({
+        'string.min': `Password must be at least ${SIMPLE_PASSWORD_MIN} characters`,
+        'any.required': 'New password is required'
+    })
+});
+
 // Register Pilgrim (By Moderator/Admin)
 exports.register_pilgrim_schema = Joi.object({
     full_name: Joi.string().required().min(3).max(100).messages({ 

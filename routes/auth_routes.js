@@ -7,6 +7,8 @@ const validate = require('../middleware/validation_middleware');
 const {
     register_schema,
     login_schema,
+    forgot_password_schema,
+    reset_password_schema,
     register_invited_pilgrim_schema,
     update_profile_schema,
     update_location_schema,
@@ -33,6 +35,8 @@ router.post('/register', registerLimiter, validate(register_schema), auth_ctrl.r
 router.post('/register-invited-pilgrim', registerLimiter, validate(register_invited_pilgrim_schema), auth_ctrl.register_invited_pilgrim);
 router.post('/login', loginLimiter, validate(login_schema), auth_ctrl.login_user);
 router.post('/pilgrim/one-time-login', loginLimiter, validate(pilgrim_token_login_schema), auth_ctrl.pilgrim_one_time_login);
+router.post('/forgot-password', authLimiter, validate(forgot_password_schema), auth_ctrl.forgot_password_request);
+router.post('/reset-password', authLimiter, validate(reset_password_schema), auth_ctrl.forgot_password_reset);
 
 // ==========================================
 // Protected Routes (All Users)

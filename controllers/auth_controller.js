@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
 const mongoose = require('mongoose');
-const { generateVerificationCode, sendVerificationEmail } = require('../config/email_service');
+const { generateVerificationCode, sendVerificationEmail, sendPasswordResetEmail } = require('../config/email_service');
 const { logger } = require('../config/logger');
 const { sendSuccess, sendError, sendValidationError, sendServerError, JWT_EXPIRATION } = require('../utils/response_helpers');
 
@@ -1202,3 +1202,93 @@ exports.pilgrim_one_time_login = async (req, res) => {
     }
 };
 
+// ── Forgot Password — request reset code ──────────────────────────────────────
+exports.forgot_password_request = async (req, res) => {
+    try {
+        const email = normalizeString(req.body.email).toLowerCase();
+
+        // Always return success to avoid leaking whether email exists
+        const successResponse = () =>
+            sendSuccess(res, 200, 'If an account with that email exists, a reset code has been sent.');
+
+        const user = await User.findOne({ email, active: true });
+        if (!user) return successResponse();
+
+        // Only moderators and admins can reset passwords (pilgrims use one-time tokens)
+        if (user.user_type === 'pilgrim') return successResponse();
+
+        const code = generateVerificationCode();
+        const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+        user.password_reset = {
+            code_hash: codeHash,
+            expires_at: expiresAt,
+            attempts: 0,
+        };
+        await user.save();
+
+        try {
+            await sendPasswordResetEmail(email, code, user.full_name);
+        } catch (emailErr) {
+            logger.error(`Failed to send password reset email: ${emailErr.message}`);
+            return sendError(res, 500, 'Failed to send reset email. Please try again later.');
+        }
+
+        return successResponse();
+    } catch (error) {
+        sendServerError(res, logger, 'Forgot password request error', error);
+    }
+};
+
+// ── Forgot Password — verify code & reset password ────────────────────────────
+exports.forgot_password_reset = async (req, res) => {
+    try {
+        const email = normalizeString(req.body.email).toLowerCase();
+        const code = normalizeString(req.body.code);
+        const newPassword = req.body.new_password;
+
+        const user = await User.findOne({ email, active: true });
+        if (!user || user.user_type === 'pilgrim') {
+            return sendError(res, 400, 'Invalid reset request.');
+        }
+
+        const pr = user.password_reset;
+        if (!pr || !pr.code_hash || !pr.expires_at) {
+            return sendError(res, 400, 'No password reset was requested. Please request a new code.');
+        }
+
+        // Check expiry
+        if (new Date() > new Date(pr.expires_at)) {
+            user.password_reset = { code_hash: null, expires_at: null, attempts: 0 };
+            await user.save();
+            return sendError(res, 400, 'Reset code has expired. Please request a new one.');
+        }
+
+        // Check attempts (max 5)
+        if (pr.attempts >= 5) {
+            user.password_reset = { code_hash: null, expires_at: null, attempts: 0 };
+            await user.save();
+            return sendError(res, 429, 'Too many failed attempts. Please request a new code.');
+        }
+
+        // Verify code
+        const inputHash = crypto.createHash('sha256').update(code).digest('hex');
+        if (inputHash !== pr.code_hash) {
+            user.password_reset.attempts = (pr.attempts || 0) + 1;
+            await user.save();
+            return sendError(res, 400, 'Invalid reset code. Please try again.');
+        }
+
+        // Code is valid — hash new password and save
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        user.password_reset = { code_hash: null, expires_at: null, attempts: 0 };
+        await user.save();
+
+        logger.info(`Password reset successful for user ${user._id} (${email})`);
+        sendSuccess(res, 200, 'Password has been reset successfully. You can now log in with your new password.');
+    } catch (error) {
+        sendServerError(res, logger, 'Password reset error', error);
+    }
+};
