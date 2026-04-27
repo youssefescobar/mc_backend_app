@@ -36,19 +36,29 @@ const initializeSockets = (io) => {
                         last_active_at: new Date()
                     });
                 }
-                // Sync any currently-active nav beacons to the newly joined client
+                // Sync any currently-active nav beacons to the newly joined client.
+                // Search ALL connected sockets (not just room members) because the
+                // moderator may have navigated away from the group screen and emitted
+                // leave_group — removing them from the room — while their beacon is
+                // still active on their socket.data.navBeacon.
                 try {
-                    const roomSockets = await io.in(`group_${groupId}`).fetchSockets();
-                    for (const s of roomSockets) {
-                        if (s.id !== socket.id && s.data.navBeacon && s.data.navBeacon.groupId === groupId) {
+                    const allSockets = await io.fetchSockets();
+                    let syncCount = 0;
+                    for (const s of allSockets) {
+                        const beacon = s.data.navBeacon;
+                        if (s.id !== socket.id && beacon && String(beacon.groupId) === String(groupId)) {
                             socket.emit('mod_nav_beacon', {
-                                moderatorId: s.data.navBeacon.moderatorId,
-                                moderatorName: s.data.navBeacon.moderatorName,
+                                moderatorId: beacon.moderatorId,
+                                moderatorName: beacon.moderatorName,
                                 enabled: true,
-                                lat: s.data.navBeacon.lat,
-                                lng: s.data.navBeacon.lng,
+                                lat: beacon.lat,
+                                lng: beacon.lng,
                             });
+                            syncCount++;
                         }
+                    }
+                    if (syncCount > 0) {
+                        console.log(`[Socket] Synced ${syncCount} active beacons to user ${socket.id} for group_${groupId}`);
                     }
                 } catch (err) {
                     console.error('[Socket] Error syncing nav beacons on join:', err);
