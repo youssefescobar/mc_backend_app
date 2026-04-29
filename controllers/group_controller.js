@@ -327,6 +327,27 @@ exports.get_my_groups = async (req, res) => {
             });
         }
 
+        // Aggregate unread messages for this user grouped by group_id
+        const group_ids = groups.map(g => g._id);
+        const unreadCounts = await Message.aggregate([
+            {
+                $match: {
+                    group_id: { $in: group_ids },
+                    $or: [{ recipient_id: null }, { recipient_id: user_id }],
+                    read_by: { $ne: user_id }
+                }
+            },
+            {
+                $group: {
+                    _id: "$group_id",
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        
+        const unreadMap = {};
+        unreadCounts.forEach(c => unreadMap[c._id.toString()] = c.count);
+
         // Enrich groups with pilgrim data from map
         const enriched_data = groups.map(group => {
             const pilgrim_ids = group.pilgrim_ids || [];
@@ -358,6 +379,8 @@ exports.get_my_groups = async (req, res) => {
 
             // Polyfill created_at if missing
             group.created_at = group.createdAt || group.created_at || (group._id && group._id.getTimestamp ? group._id.getTimestamp() : new Date());
+
+            group.unread_count = unreadMap[group._id.toString()] || 0;
 
             return group;
         });

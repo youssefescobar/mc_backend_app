@@ -52,7 +52,8 @@ exports.send_message = async (req, res) => {
             media_url,
             is_urgent: is_urgent || false,
             original_text: type === 'tts' ? original_text : undefined,
-            duration: req.body.duration ? parseInt(req.body.duration) : 0
+            duration: req.body.duration ? parseInt(req.body.duration) : 0,
+            read_by: [safe_sender_id]
         });
 
         // Populate sender info for immediate frontend display
@@ -172,7 +173,8 @@ exports.send_individual_message = async (req, res) => {
             media_url,
             is_urgent: is_urgent || false,
             original_text: type === 'tts' ? original_text : undefined,
-            duration: req.body.duration ? parseInt(req.body.duration) : 0
+            duration: req.body.duration ? parseInt(req.body.duration) : 0,
+            read_by: [safe_sender_id]
         });
 
         await message.populate('sender_id', 'full_name profile_picture role');
