@@ -250,11 +250,6 @@ exports.join_group = async (req, res) => {
             return sendError(res, 404, 'Invalid group code');
         }
 
-        // Only pilgrims can join groups via code
-        if (req.user.role !== 'pilgrim') {
-            return sendError(res, 403, 'Only pilgrims can join groups via code. Moderators must be invited.');
-        }
-
         // Check if already in group
         const is_member = group.pilgrim_ids.some(id => id.toString() === user_id.toString()) ||
             group.moderator_ids.some(id => id.toString() === user_id.toString());
@@ -263,15 +258,21 @@ exports.join_group = async (req, res) => {
             return sendError(res, 400, 'You are already a member of this group');
         }
 
-        // Add to pilgrim_ids
-        group.pilgrim_ids.push(user_id);
+        const is_pilgrim = req.user.role === 'pilgrim';
+
+        if (is_pilgrim) {
+            group.pilgrim_ids.push(user_id);
+        } else {
+            group.moderator_ids.push(user_id);
+        }
+        
         await group.save();
 
         sendSuccess(res, 200, `Successfully joined group: ${group.group_name}`, {
             group: {
                 _id: group._id,
                 group_name: group.group_name,
-                role: 'member'
+                role: is_pilgrim ? 'member' : 'moderator'
             }
         });
 
