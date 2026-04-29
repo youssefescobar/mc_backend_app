@@ -1184,6 +1184,7 @@ exports.update_suggested_area = async (req, res) => {
 exports.get_group_resource_options = async (req, res) => {
     try {
         const group_id = toObjectId(req.params.group_id);
+        const exclude_pilgrim_id = toObjectId(req.query.exclude_pilgrim_id);
         if (!group_id) return sendError(res, 400, 'Invalid group identifier');
 
         const group = await Group.findById(group_id)
@@ -1204,8 +1205,67 @@ exports.get_group_resource_options = async (req, res) => {
             Bus.find({ _id: { $in: group.assigned_bus_ids || [] }, active: true }).sort({ destination: 1, departure_time: 1 }).lean()
         ]);
 
+        // Calculate Global Occupancy
+        // We count all users in the system (across all groups) assigned to these rooms
+        const occupancies = await User.aggregate([
+            { 
+                $match: { 
+                    hotel_id: { $in: group.assigned_hotel_ids || [] },
+                    room_id: { $ne: null },
+                    active: true
+                } 
+            },
+            {
+                $group: {
+                    _id: { hotel_id: "$hotel_id", room_id: "$room_id" },
+                    count: { $sum: 1 },
+                    // Track if the excluded pilgrim is in this room
+                    includesExcluded: {
+                        $max: {
+                            $cond: [
+                                { $eq: ["$_id", exclude_pilgrim_id] },
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        const occupancyMap = {};
+        occupancies.forEach(occ => {
+            const key = `${occ._id.hotel_id}_${occ._id.room_id}`;
+            occupancyMap[key] = {
+                count: occ.count,
+                includesExcluded: occ.includesExcluded === 1
+            };
+        });
+
+        // Enrich and filter rooms
+        const filteredHotels = hotels.map(hotel => {
+            const enrichedRooms = (hotel.rooms || []).filter(room => {
+                if (!room.active) return false;
+
+                const occData = occupancyMap[`${hotel._id}_${room._id}`] || { count: 0, includesExcluded: false };
+                const count = occData.count;
+                const capacity = room.capacity || 1;
+
+                // Attach occupancy info for frontend reference
+                room.current_occupancy = count;
+                
+                // HIDE if reached capacity, UNLESS the pilgrim being edited is already in this room
+                if (count >= capacity && !occData.includesExcluded) {
+                    return false;
+                }
+                return true;
+            });
+
+            return { ...hotel, rooms: enrichedRooms };
+        }).filter(h => h.rooms.length > 0 || (h.active && group.assigned_hotel_ids.includes(h._id)));
+
         sendSuccess(res, 200, null, {
-            hotels,
+            hotels: filteredHotels,
             buses,
         });
     } catch (error) {

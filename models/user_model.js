@@ -89,6 +89,23 @@ const user_schema = new mongoose.Schema({
         trim: true,
         maxlength: 120
     },
+    hotel_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Hotel',
+        default: null,
+        index: true
+    },
+    room_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null,
+        index: true
+    },
+    bus_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Bus',
+        default: null,
+        index: true
+    },
     ethnicity: {
         type: String,
         enum: [
@@ -252,6 +269,7 @@ user_schema.index({ user_type: 1, active: 1 });
 user_schema.index({ current_latitude: 1, current_longitude: 1 }); // For geospatial queries
 user_schema.index({ is_online: 1, user_type: 1 });
 user_schema.index({ moderated_by: 1, user_type: 1 });
+user_schema.index({ hotel_id: 1, room_id: 1 });
 
 // ========================================
 // Virtual Properties

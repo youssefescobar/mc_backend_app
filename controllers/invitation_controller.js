@@ -180,11 +180,24 @@ const accept_invitation = async (req, res) => {
         invitation.status = 'accepted';
         await invitation.save();
 
-        // Mark related notification as read
+        // Mark related notification as read and update status/message
         await Notification.updateMany(
             { 'data.invitation_id': invitation._id, user_id },
-            { read: true }
+            { 
+                read: true,
+                message: 'invite_msg_accepted',
+                'data.status': 'accepted'
+            }
         );
+
+        // Emit real-time refresh to the user so their UI updates immediately
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${user_id}`).emit('notification_refresh', {
+                type: 'group_invitation',
+                status: 'accepted'
+            });
+        }
 
         // Notify the inviter (DB record + FCM push)
         const acceptee_name = account?.full_name || req.user.full_name || 'Someone';
@@ -264,11 +277,24 @@ const decline_invitation = async (req, res) => {
         invitation.status = 'declined';
         await invitation.save();
 
-        // Mark related notification as read
+        // Mark related notification as read and update status/message
         await Notification.updateMany(
             { 'data.invitation_id': invitation._id, user_id },
-            { read: true }
+            { 
+                read: true,
+                message: 'invite_msg_declined',
+                'data.status': 'declined'
+            }
         );
+
+        // Emit real-time refresh to the user
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${user_id}`).emit('notification_refresh', {
+                type: 'group_invitation',
+                status: 'declined'
+            });
+        }
 
         // Notify the inviter
         await Notification.create({

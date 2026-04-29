@@ -433,6 +433,8 @@ exports.trigger_sos = async (req, res) => {
                 .filter(Boolean)
         );
         const moderatorIds = Array.from(moderatorIdsSet);
+        
+        const sos_id = new mongoose.Types.ObjectId();
 
         const notifications = moderatorIds.map(modId => ({
             user_id: modId,
@@ -440,6 +442,7 @@ exports.trigger_sos = async (req, res) => {
             title: 'Lost Pilgrim Alert',
             message: `${user.full_name} reported they are lost and needs help.`,
             data: {
+                sos_id,
                 pilgrim_id: user._id,
                 pilgrim_name: user.full_name,
                 pilgrim_phone: user.phone_number,
@@ -467,6 +470,7 @@ exports.trigger_sos = async (req, res) => {
                 },
                 group_id: group._id,
                 group_name: group.group_name,
+                sos_id,
                 timestamp: new Date()
             });
             console.log(`[API] SOS alert emitted to group ${group._id}`);
@@ -505,7 +509,8 @@ exports.trigger_sos = async (req, res) => {
         logger.warn(`SOS Alert triggered by ${user.full_name} (${user._id}) in group ${group.group_name}`);
 
         sendSuccess(res, 200, 'SOS alert sent to moderators', {
-            notified_count: moderatorIds.length
+            notified_count: moderatorIds.length,
+            sos_id
         });
     } catch (error) {
         sendServerError(res, logger, 'SOS trigger error', error);

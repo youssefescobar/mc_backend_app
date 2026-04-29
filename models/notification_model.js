@@ -60,6 +60,11 @@ const notification_schema = new mongoose.Schema({
         area_id: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'SuggestedArea'
+        },
+        status: String,
+        sos_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Notification'
         }
     },
     read: {

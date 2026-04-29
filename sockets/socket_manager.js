@@ -541,7 +541,13 @@ const initializeSockets = (io) => {
                     await Notification.deleteMany({
                         type: 'sos_alert',
                         'data.pilgrim_id': targetPilgrimId,
-                        created_at: { $gte: startTime, $lte: endTime }
+                        ...(data.sos_id ? { 'data.sos_id': data.sos_id } : { created_at: { $gte: startTime, $lte: endTime } })
+                    });
+                } else if (data.sos_id) {
+                    // Fallback: if latestSos not found but sos_id provided, delete by ID directly
+                    await Notification.deleteMany({
+                        type: 'sos_alert',
+                        'data.sos_id': data.sos_id
                     });
                 }
             } catch (err) {

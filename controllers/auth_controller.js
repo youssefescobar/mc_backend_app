@@ -106,7 +106,7 @@ const canManageGroup = (group, user) => {
     return (group.moderator_ids || []).some((id) => id.toString() === String(user.id));
 };
 
-const resolveGroupAssignmentFields = async ({ group, row }) => {
+const resolveGroupAssignmentFields = async ({ group, row, pilgrim_id }) => {
     const normalizedHotelId = normalizeString(row.hotel_id);
     const normalizedBusId = normalizeString(row.bus_id);
     const normalizedRoomId = normalizeString(row.room_id);
@@ -115,8 +115,11 @@ const resolveGroupAssignmentFields = async ({ group, row }) => {
     const normalizedRoomNumber = normalizeString(row.room_number);
 
     let hotel_name;
+    let hotel_id;
     let bus_info;
+    let bus_id;
     let room_number;
+    let room_id;
 
     const assignedHotelIds = (group.assigned_hotel_ids || []).map((id) => id.toString());
     const assignedBusIds = (group.assigned_bus_ids || []).map((id) => id.toString());
@@ -132,19 +135,38 @@ const resolveGroupAssignmentFields = async ({ group, row }) => {
         }
 
         hotel_name = hotel.name;
+        hotel_id = hotel._id;
 
+        let room;
         if (normalizedRoomId) {
-            const room = (hotel.rooms || []).find((item) => item._id.toString() === normalizedRoomId && item.active);
+            room = (hotel.rooms || []).find((item) => item._id.toString() === normalizedRoomId && item.active);
             if (!room) {
                 throw new Error('Selected room is invalid for selected hotel');
             }
-            room_number = room.room_number;
         } else if (normalizedRoomNumber) {
-            const room = (hotel.rooms || []).find((item) => String(item.room_number || '').trim().toLowerCase() === normalizedRoomNumber.toLowerCase() && item.active);
+            room = (hotel.rooms || []).find((item) => String(item.room_number || '').trim().toLowerCase() === normalizedRoomNumber.toLowerCase() && item.active);
             if (!room) {
                 throw new Error('Room number is not available in selected hotel');
             }
+        }
+
+        if (room) {
             room_number = room.room_number;
+            room_id = room._id;
+
+            // Capacity Check
+            const occupancyQuery = {
+                hotel_id: hotel._id,
+                room_id: room._id,
+            };
+            if (pilgrim_id) {
+                occupancyQuery._id = { $ne: toObjectId(pilgrim_id) };
+            }
+
+            const currentOccupancy = await User.countDocuments(occupancyQuery);
+            if (currentOccupancy >= (room.capacity || 1)) {
+                throw new Error(`Room ${room.room_number} has reached its maximum capacity (${currentOccupancy}/${room.capacity || 1})`);
+            }
         }
     } else if (normalizedHotelName) {
         const assignedHotels = await Hotel.find({ _id: { $in: assignedHotelIds }, active: true }).lean();
@@ -153,12 +175,29 @@ const resolveGroupAssignmentFields = async ({ group, row }) => {
             throw new Error('Hotel name is not assigned to this group');
         }
         hotel_name = matchedHotel.name;
+        hotel_id = matchedHotel._id;
+
         if (normalizedRoomNumber) {
             const room = (matchedHotel.rooms || []).find((item) => String(item.room_number || '').trim().toLowerCase() === normalizedRoomNumber.toLowerCase() && item.active);
             if (!room) {
                 throw new Error('Room number is not available in selected hotel');
             }
             room_number = room.room_number;
+            room_id = room._id;
+
+            // Capacity Check
+            const occupancyQuery = {
+                hotel_id: matchedHotel._id,
+                room_id: room._id,
+            };
+            if (pilgrim_id) {
+                occupancyQuery._id = { $ne: toObjectId(pilgrim_id) };
+            }
+
+            const currentOccupancy = await User.countDocuments(occupancyQuery);
+            if (currentOccupancy >= (room.capacity || 1)) {
+                throw new Error(`Room ${room.room_number} has reached its maximum capacity (${currentOccupancy}/${room.capacity || 1})`);
+            }
         }
     }
 
@@ -173,6 +212,7 @@ const resolveGroupAssignmentFields = async ({ group, row }) => {
         }
 
         bus_info = `${bus.bus_number} - ${bus.destination}`;
+        bus_id = bus._id;
     } else if (normalizedBusInfo) {
         const assignedBuses = await Bus.find({ _id: { $in: assignedBusIds }, active: true }).lean();
         const matchedBus = assignedBuses.find((item) => {
@@ -183,12 +223,16 @@ const resolveGroupAssignmentFields = async ({ group, row }) => {
             throw new Error('Bus info is not assigned to this group');
         }
         bus_info = `${matchedBus.bus_number} - ${matchedBus.destination}`;
+        bus_id = matchedBus._id;
     }
 
     return {
         hotel_name: hotel_name || undefined,
+        hotel_id: hotel_id || undefined,
         bus_info: bus_info || undefined,
+        bus_id: bus_id || undefined,
         room_number: room_number || (normalizedRoomNumber || undefined),
+        room_id: room_id || undefined,
     };
 };
 
@@ -750,8 +794,11 @@ exports.provision_pilgrim = async (req, res) => {
             language: req.body.language || 'en',
             medical_history: normalizeString(req.body.medical_history) || undefined,
             room_number: resourceFields.room_number,
+            room_id: resourceFields.room_id,
             bus_info: resourceFields.bus_info,
+            bus_id: resourceFields.bus_id,
             hotel_name: resourceFields.hotel_name,
+            hotel_id: resourceFields.hotel_id,
             ethnicity: normalizeString(req.body.ethnicity) || undefined,
             visa: buildVisaPayload(req.body.visa),
             created_by: toObjectId(req.user.id),
@@ -857,8 +904,11 @@ exports.provision_pilgrims_bulk = async (req, res) => {
                 language: row.language || 'en',
                 medical_history: normalizeString(row.medical_history) || undefined,
                 room_number: resourceFields.room_number,
+                room_id: resourceFields.room_id,
                 bus_info: resourceFields.bus_info,
+                bus_id: resourceFields.bus_id,
                 hotel_name: resourceFields.hotel_name,
+                hotel_id: resourceFields.hotel_id,
                 ethnicity: normalizeString(row.ethnicity) || undefined,
                 visa: buildVisaPayload(row.visa),
                 created_by: toObjectId(req.user.id),
@@ -1119,8 +1169,25 @@ exports.update_pilgrim_details = async (req, res) => {
 
         const {
             full_name, phone_number, age, gender, medical_history,
-            language, room_number, bus_info, hotel_name, ethnicity, visa
+            language, room_number, room_id, bus_info, bus_id, hotel_name, hotel_id, ethnicity, visa
         } = req.body;
+        
+        let resourceFields = {};
+        if (room_number !== undefined || hotel_name !== undefined || room_id !== undefined || hotel_id !== undefined || bus_info !== undefined || bus_id !== undefined) {
+            // Find a group this pilgrim belongs to, to validate resources
+            const group = await Group.findOne({ pilgrim_ids: pilgrim_id });
+            if (group) {
+                try {
+                    resourceFields = await resolveGroupAssignmentFields({ 
+                        group, 
+                        row: { ...req.body },
+                        pilgrim_id 
+                    });
+                } catch (error) {
+                    return sendError(res, 400, error.message || 'Invalid logistics assignment');
+                }
+            }
+        }
 
         const updateData = {
             ...(full_name && { full_name }),
@@ -1129,9 +1196,12 @@ exports.update_pilgrim_details = async (req, res) => {
             ...(gender && { gender }),
             ...(medical_history !== undefined && { medical_history }),
             ...(language && { language }),
-            ...(room_number !== undefined && { room_number }),
-            ...(bus_info !== undefined && { bus_info }),
-            ...(hotel_name !== undefined && { hotel_name }),
+            ...(resourceFields.room_number !== undefined && { room_number: resourceFields.room_number }),
+            ...(resourceFields.room_id !== undefined && { room_id: resourceFields.room_id }),
+            ...(resourceFields.bus_info !== undefined && { bus_info: resourceFields.bus_info }),
+            ...(resourceFields.bus_id !== undefined && { bus_id: resourceFields.bus_id }),
+            ...(resourceFields.hotel_name !== undefined && { hotel_name: resourceFields.hotel_name }),
+            ...(resourceFields.hotel_id !== undefined && { hotel_id: resourceFields.hotel_id }),
             ...(ethnicity && { ethnicity }),
             ...(visa && { visa })
         };
