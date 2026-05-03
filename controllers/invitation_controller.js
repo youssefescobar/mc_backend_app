@@ -8,128 +8,173 @@ const { sendGroupInvitationEmail } = require('../config/email_service');
 const { sendPushNotification } = require('../services/pushNotificationService');
 const { logger } = require('../config/logger');
 
+const parseInviteEmails = (payload = {}) => {
+    const single = typeof payload.email === 'string' ? [payload.email] : [];
+    const many = Array.isArray(payload.emails) ? payload.emails : [];
+    const combined = [...single, ...many]
+        .map((e) => String(e || '').trim().toLowerCase())
+        .filter(Boolean);
+
+    return [...new Set(combined)];
+};
+
+const createInvitationForEmail = async ({
+    req,
+    group,
+    inviter,
+    inviter_id,
+    email
+}) => {
+    // Check if user exists (as moderator/admin or as pilgrim) in parallel
+    const [invitee, invitee_pilgrim] = await Promise.all([
+        User.findOne({ email, user_type: { $in: ['moderator', 'admin'] } }),
+        User.findOne({ email, user_type: 'pilgrim' })
+    ]);
+
+    // Check if already a moderator
+    if (invitee && group.moderator_ids.some(id => id.toString() === invitee._id.toString())) {
+        return { ok: false, email, error: 'User is already a moderator of this group' };
+    }
+
+    // Check if pilgrim is already in the group
+    if (invitee_pilgrim && group.pilgrim_ids.some(id => id.toString() === invitee_pilgrim._id.toString())) {
+        return { ok: false, email, error: 'This user is already a member of this group' };
+    }
+
+    // Check for existing pending invitation
+    const existing_invitation = await Invitation.findOne({
+        group_id: group._id,
+        invitee_email: email,
+        status: 'pending'
+    });
+
+    if (existing_invitation) {
+        return { ok: false, email, error: 'An invitation is already pending for this email' };
+    }
+
+    // Create invitation
+    const invitee_ref_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
+    const invitation = await Invitation.create({
+        group_id: group._id,
+        inviter_id,
+        invitee_id: invitee_ref_id,
+        invitee_email: email
+    });
+
+    // Create notification for invitee if registered (moderator or pilgrim)
+    const notify_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
+    if (notify_id) {
+        await Notification.create({
+            user_id: notify_id,
+            type: 'group_invitation',
+            title: 'Group Invitation',
+            message: `${inviter.full_name} invited you to join "${group.group_name}"`,
+            data: {
+                invitation_id: invitation._id,
+                group_id: group._id,
+                group_name: group.group_name,
+                inviter_name: inviter.full_name
+            }
+        });
+
+        // Send FCM push notification to the invitee's device
+        const invitee_user = invitee || invitee_pilgrim;
+        if (invitee_user?.fcm_token) {
+            try {
+                await sendPushNotification(
+                    [invitee_user.fcm_token],
+                    'Group Invitation 📩',
+                    `${inviter.full_name} invited you to join "${group.group_name}"`,
+                    {
+                        type: 'group_invitation',
+                        invitation_id: invitation._id.toString(),
+                        group_id: group._id.toString(),
+                        group_name: group.group_name,
+                        inviter_name: inviter.full_name,
+                        notification_type: 'group_invitation'
+                    }
+                );
+                logger.info(`FCM invitation push sent to ${invitee_user.full_name}`);
+            } catch (push_err) {
+                logger.warn(`FCM push to invitee failed (non-fatal): ${push_err.message}`);
+            }
+        }
+
+        // Emit a real-time socket event so the invitee's app refreshes notifications immediately
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${notify_id}`).emit('notification_refresh', {
+                type: 'group_invitation'
+            });
+            logger.info(`Socket notification_refresh emitted to user_${notify_id}`);
+        }
+    }
+
+    // Send invitation email
+    const frontend_url = process.env.FRONTEND_URL || 'http://localhost:3000';
+    await sendGroupInvitationEmail(email, inviter.full_name, group.group_name, frontend_url);
+
+    logger.info(`Invitation sent: ${invitation._id} by ${inviter.full_name}`);
+    return { ok: true, email, invitation_id: invitation._id };
+};
+
 // Send invitation to another moderator
 const send_invitation = async (req, res) => {
     try {
         const { group_id } = req.params;
-        const { email } = req.body;
         const inviter_id = req.user.id;
+        const emails = parseInviteEmails(req.body);
 
-        // Get group and verify inviter is a moderator
+        if (emails.length === 0) {
+            return res.status(400).json({ success: false, message: 'At least one invite email is required' });
+        }
+
+        // Get group and verify inviter is the creator
         const group = await Group.findById(group_id);
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' });
         }
 
-        const is_moderator = group.moderator_ids.some(id => id.toString() === inviter_id.toString());
-        if (!is_moderator) {
-            return res.status(403).json({ success: false, message: 'Only group moderators can send invitations' });
+        if (group.created_by.toString() !== inviter_id.toString()) {
+            return res.status(403).json({ success: false, message: 'Only the group creator can send invitations' });
         }
 
-        // Check if user exists (as moderator/admin or as pilgrim) in parallel
-        const [invitee, invitee_pilgrim] = await Promise.all([
-            User.findOne({ email: email.toLowerCase(), user_type: { $in: ['moderator', 'admin'] } }),
-            User.findOne({ email: email.toLowerCase(), user_type: 'pilgrim' })
-        ]);
-
-        // Check if already a moderator
-        if (invitee && group.moderator_ids.some(id => id.toString() === invitee._id.toString())) {
-            return res.status(400).json({ success: false, message: 'User is already a moderator of this group' });
+        // Get inviter info once and reuse for all invites
+        const inviter = await User.findById(inviter_id).select('full_name');
+        if (!inviter) {
+            return res.status(404).json({ success: false, message: 'Inviter account not found' });
         }
 
-        // Check if pilgrim is already in the group
-        if (invitee_pilgrim && group.pilgrim_ids.some(id => id.toString() === invitee_pilgrim._id.toString())) {
-            return res.status(400).json({ success: false, message: 'This user is already a member of this group' });
-        }
-
-        // Check for existing pending invitation
-        const existing_invitation = await Invitation.findOne({
-            group_id,
-            invitee_email: email.toLowerCase(),
-            status: 'pending'
-        });
-
-        if (existing_invitation) {
-            return res.status(400).json({ success: false, message: 'An invitation is already pending for this email' });
-        }
-
-        // Create invitation
-        const invitee_ref_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
-        const invitation = await Invitation.create({
-            group_id,
-            inviter_id,
-            invitee_id: invitee_ref_id,
-            invitee_email: email.toLowerCase()
-        });
-
-        // Get inviter info for email/notification
-        // Use role to skip double query
-        let inviter;
-        if (req.user.role === 'pilgrim') { // Unlikely but possible if logic changes
-            inviter = await Pilgrim.findById(inviter_id);
-        } else {
-            inviter = await User.findById(inviter_id);
-        }
-
-        // Create notification for invitee if registered (moderator or pilgrim)
-        const notify_id = invitee ? invitee._id : (invitee_pilgrim ? invitee_pilgrim._id : null);
-        if (notify_id) {
-            await Notification.create({
-                user_id: notify_id,
-                type: 'group_invitation',
-                title: 'Group Invitation',
-                message: `${inviter.full_name} invited you to join "${group.group_name}"`,
-                data: {
-                    invitation_id: invitation._id,
-                    group_id: group._id,
-                    group_name: group.group_name,
-                    inviter_name: inviter.full_name
-                }
-            });
-
-            // Send FCM push notification to the invitee's device
-            const invitee_user = invitee || invitee_pilgrim;
-            if (invitee_user?.fcm_token) {
-                try {
-                    await sendPushNotification(
-                        [invitee_user.fcm_token],
-                        'Group Invitation 📩',
-                        `${inviter.full_name} invited you to join "${group.group_name}"`,
-                        {
-                            type: 'group_invitation',
-                            invitation_id: invitation._id.toString(),
-                            group_id: group._id.toString(),
-                            group_name: group.group_name,
-                            inviter_name: inviter.full_name,
-                            notification_type: 'group_invitation'
-                        }
-                    );
-                    logger.info(`FCM invitation push sent to ${invitee_user.full_name}`);
-                } catch (push_err) {
-                    logger.warn(`FCM push to invitee failed (non-fatal): ${push_err.message}`);
-                }
-            }
-
-            // Emit a real-time socket event so the invitee's app refreshes notifications immediately
-            const io = req.app.get('socketio');
-            if (io) {
-                io.to(`user_${notify_id}`).emit('notification_refresh', {
-                    type: 'group_invitation'
+        const results = [];
+        for (const email of emails) {
+            try {
+                const result = await createInvitationForEmail({
+                    req,
+                    group,
+                    inviter,
+                    inviter_id,
+                    email
                 });
-                logger.info(`Socket notification_refresh emitted to user_${notify_id}`);
+                results.push(result);
+            } catch (err) {
+                logger.warn(`Invitation failed for ${email}: ${err.message}`);
+                results.push({ ok: false, email, error: 'Failed to send invitation' });
             }
         }
 
-        // Send invitation email
-        const frontend_url = process.env.FRONTEND_URL || 'http://localhost:3000';
-        await sendGroupInvitationEmail(email, inviter.full_name, group.group_name, frontend_url);
+        const sent = results.filter(r => r.ok);
+        const failed = results.filter(r => !r.ok);
+        const statusCode = sent.length > 0 ? 201 : 400;
 
-        logger.info(`Invitation sent: ${invitation._id} by ${inviter.full_name}`);
-
-        res.status(201).json({
-            success: true,
-            message: 'Invitation sent successfully',
-            invitation_id: invitation._id
+        return res.status(statusCode).json({
+            success: sent.length > 0,
+            message: sent.length > 0
+                ? `Invitation processing complete: ${sent.length} sent, ${failed.length} failed`
+                : 'No invitations were sent',
+            sent_count: sent.length,
+            failed_count: failed.length,
+            sent,
+            failed
         });
     } catch (error) {
         logger.error(`Send invitation error: ${error.message}`);
@@ -214,6 +259,20 @@ const accept_invitation = async (req, res) => {
                 group_name: invitation.group_id.group_name
             }
         });
+
+        if (io) {
+            io.to(`group_${invitation.group_id._id}`).emit('group_updated', {
+                group_id: invitation.group_id._id.toString(),
+                group_name: invitation.group_id.group_name,
+                timestamp: new Date()
+            });
+            io.to(`user_${user_id}`).emit('added-to-group', {
+                group_id: invitation.group_id._id.toString(),
+                group_name: invitation.group_id.group_name,
+                role: req.user.user_type !== 'pilgrim' ? 'moderator' : 'member'
+            });
+            io.to(`user_${invitation.inviter_id}`).emit('notification_refresh');
+        }
 
         // Send FCM push to the inviter device
         try {

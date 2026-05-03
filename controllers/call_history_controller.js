@@ -1,6 +1,7 @@
 const CallHistory = require('../models/call_history_model');
 const mongoose = require('mongoose');
 const { logger } = require('../config/logger');
+const { notifyMissedCallForReceiver } = require('../services/missedCallNotify');
 
 const toObjectId = (value) => {
     if (!mongoose.Types.ObjectId.isValid(String(value || ''))) return null;
@@ -139,6 +140,47 @@ exports.answer_call = async (req, res) => {
             } else {
                 logger.warn(`[API] Caller ${callerId} socket not found for call-answer (may have disconnected)`);
             }
+
+            // Same as socket 'call-answer' handler: clear server ring-timeout so the
+            // 30s missed-call job never fires after REST answer (callee socket down).
+            try {
+                const { sendPushNotification } = require('../services/pushNotificationService');
+                const User = require('../models/user_model');
+                const callerRoom = `user_${callerId.toString()}`;
+                const callerSockets = await io.in(callerRoom).fetchSockets();
+                for (const s of callerSockets) {
+                    if (s.data?.callRingTimeout) {
+                        clearTimeout(s.data.callRingTimeout);
+                        delete s.data.callRingTimeout;
+                        logger.info(`[API] Cleared callRingTimeout for caller socket ${s.id}`);
+                    }
+                    if (s.data?.groupRingTargets?.length && answererId) {
+                        const aid = answererId.toString();
+                        for (const tid of s.data.groupRingTargets.map((x) => String(x))) {
+                            if (tid === aid) continue;
+                            io.to(`user_${tid}`).emit('call-cancel', { from: callerId.toString() });
+                            try {
+                                const u = await User.findById(tid).select('fcm_token');
+                                if (u?.fcm_token) {
+                                    await sendPushNotification(
+                                        [u.fcm_token],
+                                        'Call Cancelled',
+                                        'Another moderator answered',
+                                        { type: 'call_cancel', callerId: callerId.toString() },
+                                        true
+                                    );
+                                }
+                            } catch (fcmE) {
+                                logger.warn(`[API] group dismiss FCM ${tid}: ${fcmE.message}`);
+                            }
+                        }
+                        delete s.data.groupRingTargets;
+                        delete s.data.groupRingPendingIds;
+                    }
+                }
+            } catch (clearErr) {
+                logger.warn(`[API] Could not clear callRingTimeout: ${clearErr.message}`);
+            }
         }
 
         // Update any ringing call records to in-progress
@@ -191,6 +233,8 @@ exports.decline_call = async (req, res) => {
             callRecordId = callRecordId || ringingCall?._id || null;
         }
 
+        const noAnswer = req.body.noAnswer === true || req.body.noAnswer === 'true';
+
         // Emit to all caller sockets so every logged-in caller device updates.
         const io = req.app.get('socketio');
         if (io) {
@@ -223,17 +267,43 @@ exports.decline_call = async (req, res) => {
             }
         }
 
-        // Mark any ringing call records as declined
+        const statusToSet = noAnswer ? 'missed' : 'declined';
+        let updatedDoc = null;
         if (callRecordId) {
-            await CallHistory.updateOne(
-                { _id: callRecordId },
-                { status: 'declined', ended_at: new Date() }
+            updatedDoc = await CallHistory.findOneAndUpdate(
+                { _id: callRecordId, status: 'ringing' },
+                { status: statusToSet, ended_at: new Date() },
+                { new: true }
             );
-        } else {
+        }
+        if (!updatedDoc && resolvedDeclinerId) {
+            updatedDoc = await CallHistory.findOneAndUpdate(
+                {
+                    caller_id: callerId,
+                    receiver_id: resolvedDeclinerId,
+                    status: 'ringing',
+                },
+                { status: statusToSet, ended_at: new Date() },
+                { new: true }
+            );
+        }
+        if (!updatedDoc) {
             await CallHistory.updateMany(
                 { caller_id: callerId, status: 'ringing' },
-                { status: 'declined', ended_at: new Date() }
+                { status: statusToSet, ended_at: new Date() }
             );
+        }
+
+        if (noAnswer && statusToSet === 'missed' && updatedDoc && resolvedDeclinerId && io) {
+            const getSocketByUserId = (uid) =>
+                Array.from(io.sockets.sockets.values()).find(
+                    (s) => String(s.data.userId) === String(uid)
+                );
+            await notifyMissedCallForReceiver(io, getSocketByUserId, {
+                receiverId: String(resolvedDeclinerId),
+                callerId: String(callerId),
+                callId: String(updatedDoc._id),
+            });
         }
 
         res.json({ success: true });

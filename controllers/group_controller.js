@@ -90,6 +90,16 @@ async function scheduleMeetpointNotifications(area, group, userId) {
 
 const normalizeString = (value) => String(value || '').trim();
 
+const emitGroupUpdated = (req, groupId, payload = {}) => {
+    const io = req.app.get('socketio');
+    if (!io) return;
+    io.to(`group_${groupId}`).emit('group_updated', {
+        group_id: String(groupId),
+        ...payload,
+        timestamp: new Date()
+    });
+};
+
 // Get a single group by ID (moderator/admin only)
 exports.get_single_group = async (req, res) => {
     try {
@@ -672,6 +682,8 @@ exports.delete_group = async (req, res) => {
             return sendError(res, 403, 'Only group moderators can delete the group');
         }
 
+        const io = req.app.get('socketio');
+
         // Mark all pilgrims in the group as unassigned due to group deletion
         if (group.pilgrim_ids && group.pilgrim_ids.length > 0) {
             await User.updateMany(
@@ -685,7 +697,6 @@ exports.delete_group = async (req, res) => {
             );
             
             // Notify them via socket
-            const io = req.app.get('socketio');
             if (io) {
                 group.pilgrim_ids.forEach(pid => {
                     io.to(`user_${pid}`).emit('removed-from-group', {
@@ -695,6 +706,21 @@ exports.delete_group = async (req, res) => {
                     });
                 });
             }
+        }
+
+        // Notify all moderators (including non-creator co-moderators) so their lists refresh
+        if (io) {
+            for (const mid of group.moderator_ids || []) {
+                io.to(`user_${mid}`).emit('group_deleted', {
+                    group_id: group_id.toString(),
+                    group_name: group.group_name
+                });
+            }
+
+            io.to(`group_${group_id}`).emit('group_deleted', {
+                group_id: group_id.toString(),
+                group_name: group.group_name
+            });
         }
 
         // Delete the group
@@ -747,6 +773,18 @@ exports.remove_moderator = async (req, res) => {
                 group_name: group.group_name
             }
         });
+
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${user_id}`).emit('removed-from-group', {
+                group_id: group_id.toString(),
+                group_name: group.group_name,
+                reason: 'removed_moderator'
+            });
+            io.to(`user_${user_id}`).emit('notification_refresh');
+        }
+
+        emitGroupUpdated(req, group_id, { group_name: group.group_name });
 
         sendSuccess(res, 200, 'Moderator removed successfully');
     } catch (error) {
@@ -804,6 +842,18 @@ exports.leave_group = async (req, res) => {
                 group_name: group.group_name
             }
         });
+
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to(`user_${user_id}`).emit('removed-from-group', {
+                group_id: group_id.toString(),
+                group_name: group.group_name,
+                reason: 'left_group'
+            });
+            io.to(`user_${user_id}`).emit('notification_refresh');
+        }
+
+        emitGroupUpdated(req, group_id, { group_name: group.group_name });
 
         sendSuccess(res, 200, 'You have left the group successfully');
     } catch (error) {

@@ -39,7 +39,7 @@ const reminder_schema = new mongoose.Schema({
         type: Number,
         required: true,
         min: 1,
-        max: 20,
+        max: 104,
         default: 1
     },
     // Minutes between each repeat fire
@@ -76,6 +76,16 @@ const reminder_schema = new mongoose.Schema({
     is_urgent: {
         type: Boolean,
         default: false
+    },
+    // Dart DateTime.weekday: 1=Monday … 7=Sunday. Empty = use repeat_interval_min spacing only.
+    weekly_days: {
+        type: [Number],
+        default: [],
+        validate: {
+            validator(v) {
+                return !v || !v.length || v.every(n => Number.isInteger(n) && n >= 1 && n <= 7);
+            }
+        }
     }
 }, { timestamps: true });
 

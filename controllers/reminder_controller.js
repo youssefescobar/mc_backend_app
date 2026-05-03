@@ -21,7 +21,8 @@ exports.create_reminder = async (req, res) => {
             repeat_count,
             repeat_interval_min,
             is_daily,
-            times_per_day
+            times_per_day,
+            weekly_days
         } = req.body;
 
         const safe_group_ids = Array.isArray(group_ids) ? group_ids.map(id => toObjectId(id)).filter(id => id !== null) : [];
@@ -37,9 +38,15 @@ exports.create_reminder = async (req, res) => {
         if (target_type === 'group' && safe_group_ids.length === 0) {
             return res.status(400).json({ success: false, message: 'At least one group_id is required when target_type is "group"' });
         }
+        // all_groups: empty group_ids means every group (scheduler resolves all Group docs).
+        // system: group_ids optional (scheduler uses all pilgrims).
         if (new Date(scheduled_at) <= new Date()) {
             return res.status(400).json({ success: false, message: 'scheduled_at must be in the future' });
         }
+
+        const safeWeekly = Array.isArray(weekly_days)
+            ? [...new Set(weekly_days.map((n) => parseInt(n, 10)).filter((n) => n >= 1 && n <= 7))]
+            : [];
 
         const reminder = await Reminder.create({
             created_by: safe_user_id,
@@ -48,10 +55,11 @@ exports.create_reminder = async (req, res) => {
             pilgrim_id: target_type === 'pilgrim' ? safe_pilgrim_id : null,
             text: text.trim(),
             scheduled_at: new Date(scheduled_at),
-            repeat_count: Math.min(Math.max(parseInt(repeat_count) || 1, 1), 20),
+            repeat_count: Math.min(Math.max(parseInt(repeat_count) || 1, 1), 104),
             repeat_interval_min: Math.max(parseInt(repeat_interval_min) || 15, 1),
             is_daily: !!is_daily,
             times_per_day: Math.min(Math.max(parseInt(times_per_day) || 1, 1), 10),
+            weekly_days: safeWeekly,
             status: 'pending',
             fires_sent: 0
         });
@@ -71,9 +79,22 @@ exports.create_reminder = async (req, res) => {
 exports.get_reminders = async (req, res) => {
     try {
         const group_id = toObjectId(req.query.group_id);
-        const query = {};
-        
+        const user_id = toObjectId(req.user.id);
+        if (!user_id) {
+            return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+
+        // Never list all reminders app-wide — scope to this user's scheduled reminders only.
+        const query = { created_by: user_id };
+
         if (group_id) {
+            const isModerator = await Group.exists({ _id: group_id, moderator_ids: user_id });
+            if (!isModerator) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You can only view reminders for groups you moderate'
+                });
+            }
             query.group_ids = group_id;
         }
 

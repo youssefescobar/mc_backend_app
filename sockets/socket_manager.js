@@ -1,4 +1,5 @@
 const User = require('../models/user_model');
+const { notifyMissedCallForReceiver } = require('../services/missedCallNotify');
 
 const initializeSockets = (io) => {
     io.on('connection', (socket) => {
@@ -205,23 +206,20 @@ const initializeSockets = (io) => {
                             console.error('[Socket] ⏰ Error sending timeout call_cancel FCM:', fcmErr);
                         }
 
-                        // Create missed-call notification for receiver
+                        // Missed-call side effects (DB row already status missed)
                         try {
-                            const Notification = require('../models/notification_model');
-                            await Notification.create({
-                                user_id: receiverId,
-                                type: 'missed_call',
-                                title: 'Missed Call',
-                                message: `You missed a call from ${callerInfo.name}`,
-                                data: { caller_id: callerId, caller_name: callerInfo.name }
+                            await notifyMissedCallForReceiver(io, getSocketByUserId, {
+                                receiverId: String(receiverId),
+                                callerId: String(callerId),
+                                callId: String(callRecordId),
                             });
                         } catch (notifErr) {
-                            console.error('[Socket] ⏰ Error creating missed-call notification:', notifErr);
+                            console.error('[Socket] ⏰ Error missed-call notify:', notifErr);
                         }
                     } catch (err) {
                         console.error('[Socket] ⏰ Ring timeout handler error:', err);
                     }
-                }, 30000); // ← 30 s matches the CallKit native ring duration
+                }, 35000); // CallKit client rings ~30s; +5s avoids false "not answered" if clocks skew
 
                 // Check if recipient is reachable via socket.
                 // Use the personal room ('user_<id>') rather than a raw scan —
@@ -267,13 +265,230 @@ const initializeSockets = (io) => {
             }
         });
 
+        // Pilgrim SOS (or any caller): one Agora channel, ring all group moderators in parallel.
+        socket.on('call-offer-group', async ({ channelName, targets }) => {
+            const { sendPushNotification } = require('../services/pushNotificationService');
+            const CallHistory = require('../models/call_history_model');
+
+            if (!channelName || !Array.isArray(targets) || targets.length === 0) {
+                console.log('[Socket] call-offer-group ignored — missing channelName or targets');
+                return;
+            }
+
+            const normTargets = [...new Set(targets.map((t) => String(t)))];
+            console.log(`[Socket] Call offer GROUP from ${socket.data.userId} to ${normTargets.length} target(s)`);
+
+            try {
+                const caller = await User.findById(socket.data.userId);
+                const callerInfo = {
+                    id: socket.data.userId,
+                    name: caller?.full_name || 'Unknown',
+                    role: caller?.user_type || 'Unknown'
+                };
+
+                const firstReceiver = normTargets[0];
+                const callRecord = await CallHistory.create({
+                    caller_id: socket.data.userId,
+                    caller_model: 'User',
+                    receiver_id: firstReceiver,
+                    receiver_model: 'User',
+                    call_type: 'internet',
+                    status: 'ringing'
+                });
+                socket.data.currentCallId = callRecord._id;
+                socket.data.groupRingTargets = normTargets;
+                socket.data.groupRingPendingIds = [...normTargets];
+
+                if (socket.data.callRingTimeout) clearTimeout(socket.data.callRingTimeout);
+                const callRecordId = callRecord._id;
+                const callerId = socket.data.userId;
+
+                socket.data.callRingTimeout = setTimeout(async () => {
+                    try {
+                        const record = await CallHistory.findById(callRecordId);
+                        if (!record || record.status !== 'ringing') return;
+
+                        console.log(`[Socket] ⏰ Group ring timeout for call ${callRecordId}`);
+
+                        await CallHistory.findByIdAndUpdate(callRecordId, {
+                            status: 'missed',
+                            ended_at: new Date()
+                        });
+
+                        const callerRoom = `user_${callerId}`;
+                        io.to(callerRoom).emit('call-declined', { from: firstReceiver });
+
+                        try {
+                            const callerUser = await User.findById(callerId).select('fcm_token full_name');
+                            if (callerUser?.fcm_token) {
+                                await sendPushNotification(
+                                    [callerUser.fcm_token],
+                                    'Call Not Answered',
+                                    'The call was not answered',
+                                    {
+                                        type: 'call_declined',
+                                        callerId: String(firstReceiver),
+                                        callRecordId: callRecordId.toString()
+                                    },
+                                    true
+                                );
+                            }
+                        } catch (fcmCallerErr) {
+                            console.error('[Socket] ⏰ group ring FCM to caller:', fcmCallerErr);
+                        }
+
+                        const callerSockets = await io.in(callerRoom).fetchSockets();
+                        for (const s of callerSockets) {
+                            delete s.data.currentCallId;
+                            delete s.data.callRingTimeout;
+                            delete s.data.groupRingTargets;
+                            delete s.data.groupRingPendingIds;
+                        }
+
+                        for (const rid of normTargets) {
+                            try {
+                                const rcpt = await User.findById(rid).select('fcm_token full_name');
+                                if (rcpt?.fcm_token) {
+                                    await sendPushNotification(
+                                        [rcpt.fcm_token],
+                                        'Call Cancelled',
+                                        'Caller ended the call',
+                                        { type: 'call_cancel', callerId: String(callerId) },
+                                        true
+                                    );
+                                }
+                            } catch (fcmErr) {
+                                console.error('[Socket] ⏰ group timeout call_cancel FCM:', fcmErr);
+                            }
+                        }
+                    } catch (err) {
+                        console.error('[Socket] ⏰ Group ring timeout handler error:', err);
+                    }
+                }, 35000);
+
+                for (const to of normTargets) {
+                    const recipient = await User.findById(to);
+                    const recipientSockets = await io.in(`user_${to}`).fetchSockets();
+                    if (recipientSockets.length > 0) {
+                        console.log(`[Socket] Group offer → user_${to} (socket)`);
+                        io.to(`user_${to}`).emit('call-offer', {
+                            channelName,
+                            from: socket.data.userId,
+                            callerInfo
+                        });
+                    } else if (recipient?.fcm_token) {
+                        await sendPushNotification(
+                            [recipient.fcm_token],
+                            callerInfo.name,
+                            `Incoming call`,
+                            {
+                                type: 'incoming_call',
+                                callerId: socket.data.userId,
+                                callerName: callerInfo.name,
+                                callerRole: callerInfo.role,
+                                channelName,
+                                callRecordId: callRecord._id.toString()
+                            },
+                            true
+                        );
+                        console.log(`[Socket] Group offer FCM → ${recipient.full_name}`);
+                    } else {
+                        console.log(`[Socket] Group offer: no socket/FCM for ${to}`);
+                    }
+                }
+            } catch (error) {
+                console.error('[Socket] Error in call-offer-group:', error);
+            }
+        });
+
+        socket.on('group-call-cancel', async () => {
+            const { sendPushNotification } = require('../services/pushNotificationService');
+            const CallHistory = require('../models/call_history_model');
+            const callerId = socket.data.userId;
+            if (!callerId) return;
+
+            const callerSock = socket;
+            if (!callerSock.data?.groupRingTargets?.length) {
+                console.log('[Socket] group-call-cancel ignored — no active group ring');
+                return;
+            }
+
+            const targets = [...callerSock.data.groupRingTargets];
+            if (callerSock.data.callRingTimeout) {
+                clearTimeout(callerSock.data.callRingTimeout);
+                delete callerSock.data.callRingTimeout;
+            }
+
+            try {
+                if (callerSock.data.currentCallId) {
+                    const rec = await CallHistory.findById(callerSock.data.currentCallId);
+                    if (rec?.status === 'ringing') {
+                        await CallHistory.findByIdAndUpdate(callerSock.data.currentCallId, {
+                            status: 'declined',
+                            ended_at: new Date()
+                        });
+                    }
+                    delete callerSock.data.currentCallId;
+                }
+            } catch (e) {
+                console.error('[Socket] group-call-cancel DB:', e);
+            }
+
+            delete callerSock.data.groupRingTargets;
+            delete callerSock.data.groupRingPendingIds;
+
+            for (const rid of targets) {
+                try {
+                    io.to(`user_${rid}`).emit('call-cancel', { from: String(callerId) });
+                    const u = await User.findById(rid).select('fcm_token');
+                    if (u?.fcm_token) {
+                        await sendPushNotification(
+                            [u.fcm_token],
+                            'Call Cancelled',
+                            'Caller ended the call',
+                            { type: 'call_cancel', callerId: String(callerId) },
+                            true
+                        );
+                    }
+                } catch (e) {
+                    console.error('[Socket] group-call-cancel notify', rid, e);
+                }
+            }
+            console.log(`[Socket] group-call-cancel completed for caller ${callerId}`);
+        });
+
         socket.on('call-answer', async ({ to }) => {
             console.log(`[Socket] Call answer from ${socket.data.userId} to ${to}`);
-            // Clear the caller's ring timeout — the call was answered
+            const answererId = String(socket.data.userId);
             const callerSocket = getSocketByUserId(to);
             if (callerSocket?.data?.callRingTimeout) {
                 clearTimeout(callerSocket.data.callRingTimeout);
                 delete callerSocket.data.callRingTimeout;
+            }
+            if (callerSocket?.data?.groupRingTargets?.length) {
+                const { sendPushNotification } = require('../services/pushNotificationService');
+                const gTargets = callerSocket.data.groupRingTargets.map(String);
+                for (const tid of gTargets) {
+                    if (tid === answererId) continue;
+                    io.to(`user_${tid}`).emit('call-cancel', { from: String(to) });
+                    try {
+                        const u = await User.findById(tid).select('fcm_token full_name');
+                        if (u?.fcm_token) {
+                            await sendPushNotification(
+                                [u.fcm_token],
+                                'Call Cancelled',
+                                'Another moderator answered',
+                                { type: 'call_cancel', callerId: String(to) },
+                                true
+                            );
+                            console.log(`[Socket] ✓ Dismissed ring for mod ${tid} (another answered)`);
+                        }
+                    } catch (e) {
+                        console.error('[Socket] group dismiss FCM:', e);
+                    }
+                }
+                delete callerSocket.data.groupRingTargets;
+                delete callerSocket.data.groupRingPendingIds;
             }
             const target = callerSocket || getSocketByUserId(to);
             if (target) {
@@ -305,10 +520,32 @@ const initializeSockets = (io) => {
             }
         });
 
-        socket.on('call-declined', async ({ to }) => {
-            console.log(`[Socket] Call declined from ${socket.data.userId} to ${to}`);
-            // Clear the caller's ring timeout — decline was explicit
+        socket.on('call-declined', async (payload) => {
+            const to = payload?.to;
+            const rawNoAnswer = payload?.noAnswer;
+            const noAnswer =
+                rawNoAnswer === true || rawNoAnswer === 'true' || rawNoAnswer === 1;
+            console.log(
+                `[Socket] Call declined from ${socket.data.userId} to ${to} (noAnswer=${noAnswer})`
+            );
             const callerSock = getSocketByUserId(to);
+            const declinerId = String(socket.data.userId);
+
+            if (callerSock?.data?.groupRingPendingIds?.length) {
+                const pending = callerSock.data.groupRingPendingIds
+                    .map(String)
+                    .filter((id) => id !== declinerId);
+                callerSock.data.groupRingPendingIds = pending;
+                console.log(
+                    `[Socket] Group-ring decline from ${declinerId}; ${pending.length} moderator(s) still ringing`
+                );
+                if (pending.length > 0) {
+                    return;
+                }
+                delete callerSock.data.groupRingPendingIds;
+                delete callerSock.data.groupRingTargets;
+            }
+
             if (callerSock?.data?.callRingTimeout) {
                 clearTimeout(callerSock.data.callRingTimeout);
                 delete callerSock.data.callRingTimeout;
@@ -319,21 +556,42 @@ const initializeSockets = (io) => {
                 console.log(`[Socket] Relaying call-declined to ${callerSockets.length} caller socket(s) in ${callerRoom}`);
                 io.to(callerRoom).emit('call-declined', { from: socket.data.userId });
 
-                // Only update the call record status — do NOT create a missed-call
-                // notification or send FCM here. The caller's 'call-end' event is
-                // the single authoritative source for missed-call notifications,
-                // avoiding duplicate notifications when the receiver's CallKit
-                // dismisses and triggers an automatic decline signal.
                 try {
                     const CallHistory = require('../models/call_history_model');
-
-                    if (target.data.currentCallId) {
-                        await CallHistory.findByIdAndUpdate(target.data.currentCallId, {
-                            status: 'declined',
-                            ended_at: new Date()
+                    const sWithRecord =
+                        callerSockets.find((s) => s.data?.currentCallId) || callerSock;
+                    let record =
+                        sWithRecord?.data?.currentCallId &&
+                        (await CallHistory.findById(sWithRecord.data.currentCallId));
+                    if (!record) {
+                        record = await CallHistory.findOne({
+                            caller_id: to,
+                            receiver_id: declinerId,
+                            status: 'ringing',
+                        }).sort({ createdAt: -1 });
+                    }
+                    if (record && record.status === 'ringing') {
+                        const nextStatus = noAnswer ? 'missed' : 'declined';
+                        await CallHistory.findByIdAndUpdate(record._id, {
+                            status: nextStatus,
+                            ended_at: new Date(),
                         });
-                        console.log(`[Socket] Call record updated to declined`);
-                        delete target.data.currentCallId;
+                        console.log(`[Socket] Call record updated to ${nextStatus}`);
+                        for (const s of callerSockets) {
+                            if (
+                                s.data?.currentCallId &&
+                                String(s.data.currentCallId) === String(record._id)
+                            ) {
+                                delete s.data.currentCallId;
+                            }
+                        }
+                        if (noAnswer && nextStatus === 'missed') {
+                            await notifyMissedCallForReceiver(io, getSocketByUserId, {
+                                receiverId: String(record.receiver_id),
+                                callerId: String(record.caller_id),
+                                callId: String(record._id),
+                            });
+                        }
                     }
                 } catch (error) {
                     console.error('[Socket] Error updating call record:', error);
@@ -455,12 +713,50 @@ const initializeSockets = (io) => {
                 clearTimeout(socket.data.callRingTimeout);
                 delete socket.data.callRingTimeout;
             }
-            const target = getSocketByUserId(to);
-            if (target) {
-                target.emit('call-cancel', { from: socket.data.userId });
-            } else {
-                // Recipient has no active socket (killed/offline) — send high-priority
-                // data-only FCM so Flutter background handler can dismiss CallKit UI.
+
+            // Mark the ringing record as ended (caller hung up before answer).
+            // Do NOT use call-end here — that path treats ringing as "missed" and
+            // notifies the callee incorrectly.
+            try {
+                const CallHistory = require('../models/call_history_model');
+                if (socket.data.currentCallId) {
+                    await CallHistory.findByIdAndUpdate(socket.data.currentCallId, {
+                        status: 'declined',
+                        ended_at: new Date()
+                    });
+                    delete socket.data.currentCallId;
+                } else {
+                    await CallHistory.updateMany(
+                        {
+                            caller_id: socket.data.userId,
+                            receiver_id: to,
+                            status: 'ringing'
+                        },
+                        { status: 'declined', ended_at: new Date() }
+                    );
+                }
+            } catch (err) {
+                console.error('[Socket] Error updating call record on call-cancel:', err);
+            }
+
+            // Notify every device in the recipient's room (multi-tab / reconnect safe).
+            const recipientRoom = `user_${to}`;
+            let recipientSockets = [];
+            try {
+                recipientSockets = await io.in(recipientRoom).fetchSockets();
+            } catch (e) {
+                console.error('[Socket] fetchSockets for call-cancel failed:', e);
+            }
+
+            if (recipientSockets.length > 0) {
+                io.to(recipientRoom).emit('call-cancel', { from: socket.data.userId });
+                console.log(`[Socket] ✓ call-cancel emitted to ${recipientSockets.length} socket(s) in ${recipientRoom}`);
+            }
+
+            // FCM when no socket connected, or as backup when sockets exist but the
+            // OS has suspended the Dart VM (still ends native CallKit reliably).
+            const shouldFcm = recipientSockets.length === 0;
+            if (shouldFcm) {
                 try {
                     const { sendPushNotification } = require('../services/pushNotificationService');
                     const recipient = await User.findById(to).select('fcm_token full_name');

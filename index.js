@@ -102,7 +102,7 @@ connectDB();
 const mongoose = require('mongoose');
 const { init: initReminderScheduler } = require('./services/reminderScheduler');
 mongoose.connection.once('open', () => {
-    initReminderScheduler();
+    initReminderScheduler(app.get('socketio'));
 });
 
 // Routes Application

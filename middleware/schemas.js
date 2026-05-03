@@ -316,8 +316,9 @@ exports.resend_verification_schema = Joi.object({
  */
 
 exports.send_invitation_schema = Joi.object({
-    email: Joi.string().email().required()
-});
+    email: Joi.string().email().optional(),
+    emails: Joi.array().items(Joi.string().email()).min(1).optional()
+}).or('email', 'emails');
 
 /**
  * Communication/Session Validations
@@ -437,11 +438,13 @@ exports.create_reminder_schema = Joi.object({
         then: Joi.required(),
         otherwise: Joi.optional().allow(null, '')
     }),
-    text: Joi.string().trim().min(1).max(1000).required(),
+    // Match mongoose reminder_model text maxlength: 500
+    text: Joi.string().trim().min(1).max(500).required(),
     scheduled_at: Joi.date().iso().required(),
-    repeat_count: Joi.number().integer().min(1).max(20).optional(),
+    repeat_count: Joi.number().integer().min(1).max(104).optional(),
     repeat_interval_min: Joi.number().integer().min(1).max(1440).optional(),
     is_daily: Joi.boolean().optional().default(false),
-    times_per_day: Joi.number().integer().min(1).max(10).optional()
+    times_per_day: Joi.number().integer().min(1).max(10).optional(),
+    weekly_days: Joi.array().items(Joi.number().integer().min(1).max(7)).max(7).optional()
 });
 

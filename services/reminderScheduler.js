@@ -23,8 +23,54 @@ const Notification = require('../models/notification_model');
 /** ms threshold: fire immediately if we're within this window past due */
 const OVERDUE_GRACE_MS = 10 * 60 * 1000; // 10 minutes
 
+/** Dart weekday 1=Mon…7=Sun → JS Date.getUTCDay() 0=Sun…6=Sat */
+function dartWeekdayToUtcJsDay(d) {
+    const n = parseInt(d, 10);
+    if (n === 7) return 0;
+    return n;
+}
+
+/**
+ * Next UTC instant >= fromMs using anchor's UTC time-of-day on a day whose weekday is in weeklyDartDays (1–7).
+ */
+function nextWeeklyOccurrenceMs(anchorScheduledAt, weeklyDartDays, fromMs) {
+    if (!weeklyDartDays || weeklyDartDays.length === 0) return null;
+    const anchor = new Date(anchorScheduledAt);
+    const h = anchor.getUTCHours();
+    const mi = anchor.getUTCMinutes();
+    const s = anchor.getUTCSeconds();
+    const ms = anchor.getUTCMilliseconds();
+    const targetJsDays = new Set(weeklyDartDays.map(dartWeekdayToUtcJsDay));
+    const from = new Date(fromMs);
+    for (let delta = 0; delta < 400; delta++) {
+        const cand = new Date(Date.UTC(
+            from.getUTCFullYear(),
+            from.getUTCMonth(),
+            from.getUTCDate() + delta,
+            h, mi, s, ms
+        ));
+        if (cand.getTime() < fromMs) continue;
+        if (targetJsDays.has(cand.getUTCDay())) return cand.getTime();
+    }
+    return null;
+}
+
 /** Map of reminderId (string) → active timeout handle(s) */
 const _handles = new Map();
+
+/** Socket.IO server — set in init() for notification_refresh after DB inserts */
+let _io = null;
+
+function emitNotificationRefreshToUsers(userIds) {
+    if (!_io || !userIds?.length) return;
+    const seen = new Set();
+    for (const id of userIds) {
+        const key = id?.toString?.() ?? String(id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        _io.to(`user_${key}`).emit('notification_refresh');
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -33,8 +79,10 @@ const _handles = new Map();
 /**
  * Call once at server startup. Loads all non-terminal reminders from DB
  * and schedules their next fire.
+ * @param {import('socket.io').Server | null} io - optional; used to emit notification_refresh
  */
-async function init() {
+async function init(io) {
+    _io = io || null;
     const Reminder = require('../models/reminder_model');
     try {
         const reminders = await Reminder.find({
@@ -88,9 +136,11 @@ function scheduleNext(reminder) {
     const now = Date.now();
     const fireCount = reminder.fires_sent || 0;
     const totalFires = reminder.repeat_count || 1;
+    const weeklyDays = reminder.weekly_days;
+    const hasWeekly = weeklyDays && weeklyDays.length > 0;
 
     if (fireCount >= totalFires) {
-        if (reminder.is_daily) {
+        if (reminder.is_daily && !hasWeekly) {
             // Daily recurrence: schedule for the same time tomorrow
             const nextDay = new Date(reminder.scheduled_at);
             nextDay.setDate(nextDay.getDate() + 1);
@@ -109,10 +159,23 @@ function scheduleNext(reminder) {
         return;
     }
 
-    // Calculate the absolute time for the NEXT fire
-    const firstFire = new Date(reminder.scheduled_at).getTime();
-    const intervalMs = (reminder.repeat_interval_min || 15) * 60 * 1000;
-    const nextFireAt = firstFire + fireCount * intervalMs;
+    let nextFireAt;
+    if (hasWeekly) {
+        const fromMs = fireCount === 0
+            ? Math.max(now, new Date(reminder.scheduled_at).getTime())
+            : now + 500;
+        const nextMs = nextWeeklyOccurrenceMs(reminder.scheduled_at, weeklyDays, fromMs);
+        if (nextMs == null) {
+            logger.error(`[ReminderScheduler] No weekly slot for reminder ${key}`);
+            Reminder.findByIdAndUpdate(key, { status: 'completed' }).catch(() => {});
+            return;
+        }
+        nextFireAt = nextMs;
+    } else {
+        const firstFire = new Date(reminder.scheduled_at).getTime();
+        const intervalMs = (reminder.repeat_interval_min || 15) * 60 * 1000;
+        nextFireAt = firstFire + fireCount * intervalMs;
+    }
 
     const delayMs = nextFireAt - now;
 
@@ -166,20 +229,28 @@ async function _fire(reminderId, key) {
                 allRecipients = [{ _id: pilgrim._id, fcm_token: pilgrim.fcm_token || null, language: pilgrim.language || 'en' }];
             }
         } else if (reminder.target_type === 'system') {
-            // Target type 'system' — fetch EVERYONE (regardless of role, or maybe just pilgrims?)
-            // Usually 'system' implies all pilgrims.
-            const pilgrims = await User.find({ role: 'pilgrim' }).select('_id fcm_token language');
+            // All app pilgrims (schema field is user_type, not virtual role)
+            const pilgrims = await User.find({ user_type: 'pilgrim' }).select('_id fcm_token language');
             allRecipients = pilgrims.map(p => ({
                 _id: p._id,
                 fcm_token: p.fcm_token || null,
                 language: p.language || 'en'
             }));
         } else {
-            // target_type === 'group' or 'all_groups'
-            // Support both old group_id and new group_ids array
-            const targetGroupIds = reminder.group_ids && reminder.group_ids.length > 0
-                ? reminder.group_ids
-                : (reminder.group_id ? [reminder.group_id] : []);
+            // target_type === 'group' | 'all_groups' — resolve group IDs then member pilgrims
+            let targetGroupIds = [];
+            if (reminder.target_type === 'all_groups') {
+                if (reminder.group_ids && reminder.group_ids.length > 0) {
+                    targetGroupIds = reminder.group_ids;
+                } else {
+                    const allGroups = await Group.find({}).select('_id');
+                    targetGroupIds = allGroups.map(g => g._id);
+                }
+            } else {
+                targetGroupIds = reminder.group_ids && reminder.group_ids.length > 0
+                    ? reminder.group_ids
+                    : (reminder.group_id ? [reminder.group_id] : []);
+            }
 
             if (targetGroupIds.length > 0) {
                 const groups = await Group.find({ _id: { $in: targetGroupIds } }).select('pilgrim_ids');
@@ -225,7 +296,8 @@ async function _fire(reminderId, key) {
                         type: 'urgent',
                         messageType: 'reminder_tts',
                         body: translatedText,
-                        reminderId: reminderId
+                        reminderId: reminderId,
+                        scheduledAt: new Date().toISOString()
                     },
                     reminder.is_urgent || false // isUrgent = true → data-only, background handler does sound+TTS
                 );
@@ -251,6 +323,7 @@ async function _fire(reminderId, key) {
             });
             if (notifDocs.length) {
                 await Notification.insertMany(notifDocs);
+                emitNotificationRefreshToUsers(allRecipients.map(r => r._id));
             }
         } else {
             logger.warn(`[ReminderScheduler] Reminder ${reminderId}: no recipients found`);
@@ -278,7 +351,8 @@ async function _fire(reminderId, key) {
                 pilgrim_id: reminder.pilgrim_id,
                 group_id: reminder.group_id,
                 group_ids: reminder.group_ids,
-                is_daily: reminder.is_daily
+                is_daily: reminder.is_daily,
+                weekly_days: reminder.weekly_days
             };
             scheduleNext(updated);
         }
